@@ -20,7 +20,6 @@ public class BitTorrentApplication {
 		String command = args[0];
 		Torrent torrent;
 		String torrentFilePath;
-		String infoHash = null;
 		List<String> peerList;
 		String peerIPAndPort;
 		switch(command) {
@@ -81,13 +80,19 @@ public class BitTorrentApplication {
 			case "download_piece":
 				String pieceStoragePath = args[2];
 				torrentFilePath = args[3];
+				torrent = TorrentUtils.getTorrentFromPath(torrentFilePath);
 				int pieceIndex = Integer.parseInt(args[4]);
 				try {
-					TorrentUtils.downloadPiece(torrentFilePath, pieceStoragePath, pieceIndex);
+					TorrentUtils.downloadPiece(torrent, pieceStoragePath, pieceIndex);
 				} catch (IOException e) {
 					throw new RuntimeException(e);
 				}
 				break;
+			case "download":
+				String storageFilePath = args[2];
+				torrentFilePath = args[3];
+				TorrentUtils.downloadTorrent(torrentFilePath, storageFilePath);
+
 			default:
 				System.out.println("Unknown command: " + command);
 		}
