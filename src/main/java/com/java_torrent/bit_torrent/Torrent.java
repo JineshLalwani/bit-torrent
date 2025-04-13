@@ -5,38 +5,49 @@ import com.dampcake.bencode.Type;
 
 import java.nio.ByteBuffer;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
-public class Torrent {
+public final class Torrent {
 
-    private String trackerURL;
+    private final String trackerURL;
 
-    private long length;
+    private final long length;
 
-    private String infoHash;
+    private final String infoHash;
 
-    private long pieceLength;
+    private final long pieceLength;
 
-    private List<String> pieces;
+    private final List<String> pieces;
 
-    public Torrent(byte[] fileBytes) {
+    public static Torrent fromBytes(byte[] fileBytes) {
         Bencode bencode = new Bencode(false);
         Map<String, Object> decodedDict = bencode.decode(fileBytes, Type.DICTIONARY);
         Map<String, Object> infoDict = (Map<String, Object>) decodedDict.get("info");
-        this.trackerURL = (String) decodedDict.get("announce");
-        this.length = (long) infoDict.get("length");
-        this.pieceLength = (long) infoDict.get("piece length");
+        String trackerURL = (String) decodedDict.get("announce");
+        long length = (long) infoDict.get("length");
+        long pieceLength = (long) infoDict.get("piece length");
         Bencode bencode2 = new Bencode(true);
         Map<String, Object> bencodedInfoDict = (Map<String, Object>) bencode2.decode(fileBytes, Type.DICTIONARY).get("info");
         byte[] pieceHashBytes = ((ByteBuffer) bencodedInfoDict.get("pieces")).array();
-        this.pieces = splitPieceHashes(pieceHashBytes, 20, new ArrayList<>());
-        this.infoHash = Utils.calculateSHA1(bencode2.encode(bencodedInfoDict));
+        List<String> pieces = TorrentUtils.splitPieceHashes(pieceHashBytes, 20, new ArrayList<>());
+        String infoHash = Utils.calculateSHA1(bencode2.encode(bencodedInfoDict));
+
+        return new Torrent.Builder()
+                .setTrackerURL(trackerURL)
+                .setLength(length)
+                .setInfoHash(infoHash)
+                .setPieceLength(pieceLength)
+                .setPieces(pieces)
+                .build();
     }
 
-    private Torrent() {
-
+    private Torrent(Builder builder) {
+        this.trackerURL = builder.trackerURL;
+        this.length = builder.length;
+        this.infoHash = builder.infoHash;
+        this.pieceLength = builder.pieceLength;
+        this.pieces = builder.pieces;
     }
 
     public void printInfo() {
@@ -83,22 +94,9 @@ public class Torrent {
         }
 
         public Torrent build() {
-            Torrent torrent = new Torrent();
-            torrent.trackerURL = this.trackerURL;
-            torrent.length = this.length;
-            torrent.infoHash = this.infoHash;
-            torrent.pieceLength = this.pieceLength;
-            torrent.pieces = this.pieces;
+            Torrent torrent = new Torrent(this);
             return torrent;
         }
-    }
-
-    public static List<String> splitPieceHashes(byte[] pieces, int pieceLength, List<String> pieceHashes) {
-        for (int i = 0; i < pieces.length; i += pieceLength) {
-            String pieceHashString = Utils.byteToHexString(Arrays.copyOfRange(pieces, i, i + pieceLength));
-            pieceHashes.add(pieceHashString);
-        }
-        return pieceHashes;
     }
 
     public String getTrackerURL() {
@@ -118,10 +116,6 @@ public class Torrent {
 
     public String getInfoHash() {
         return infoHash;
-    }
-
-    public long getPieceLength() {
-        return pieceLength;
     }
 
     public List<String> getPieces() {
