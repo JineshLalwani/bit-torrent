@@ -419,4 +419,15 @@ public class TorrentDownloader {
         }
         return null;
     }
+
+    public static Map<String, Object> getMetadataFromMessage(byte[] metadataResponse) {
+        byte[] payloadBytes = Arrays.copyOfRange(metadataResponse, 2, metadataResponse.length);
+        Map<String, Object> metadataDict = new Bencode(false).decode(payloadBytes, Type.DICTIONARY);
+        System.out.println("Metadata Dictionary: " + metadataDict);
+        int metadataPieceLength = ((Number) metadataDict.get("total_size")).intValue();
+        byte[] metadataPieceBytes = Arrays.copyOfRange(payloadBytes, payloadBytes.length - metadataPieceLength, payloadBytes.length);
+        Map<String, Object> metadataPieceDict = new Bencode(true).decode(metadataPieceBytes, Type.DICTIONARY);
+        System.out.println("Metadata Piece Dictionary: " + metadataPieceDict);
+        return metadataPieceDict;
+    }
 }
