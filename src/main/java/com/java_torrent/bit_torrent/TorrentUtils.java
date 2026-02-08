@@ -22,6 +22,10 @@ public class TorrentUtils {
         return torrent;
     }
 
+    public static Torrent getTorrentFromBytes(byte[] fileBytes) {
+        return Torrent.fromBytes(fileBytes);
+    }
+
     public static Map<String, String> getParamsFromMagnetURL(String magnetURL) {
         Map<String, String> map = new HashMap<>();
         String[] parts = magnetURL.split("\\?");

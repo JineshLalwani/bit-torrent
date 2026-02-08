@@ -246,7 +246,7 @@ public class TorrentDownloader {
         }
     }
 
-    static List<String> getPeerList(Torrent torrent) throws URISyntaxException, IOException, InterruptedException {
+    public static List<String> getPeerList(Torrent torrent) throws URISyntaxException, IOException, InterruptedException {
         String url = torrent.getTrackerURL();
         String infoHash = new String(Utils.hexStringToByteArray(torrent.getInfoHash()),
                 StandardCharsets.ISO_8859_1);
