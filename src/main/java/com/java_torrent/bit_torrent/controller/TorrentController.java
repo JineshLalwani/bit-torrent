@@ -4,10 +4,16 @@ package com.java_torrent.bit_torrent.controller;
 import com.java_torrent.bit_torrent.dto.*;
         import com.java_torrent.bit_torrent.service.TorrentService;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.core.io.FileSystemResource;
+import org.springframework.core.io.Resource;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
         import org.springframework.web.multipart.MultipartFile;
+
+import java.io.File;
 
 @RestController
 @RequestMapping("/api/torrent")
@@ -81,6 +87,19 @@ public class TorrentController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(new DownloadResponse(e.getMessage()));
         }
+    }
+
+    @GetMapping("/file")
+    public ResponseEntity<Resource> getDownloadedFile(@RequestParam("path") String filePath) {
+        File file = new File(filePath);
+        if (!file.exists()) {
+            return ResponseEntity.notFound().build();
+        }
+        Resource resource = new FileSystemResource(file);
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_OCTET_STREAM)
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"" + file.getName() + "\"")
+                .body(resource);
     }
 
     @PostMapping("/decode")

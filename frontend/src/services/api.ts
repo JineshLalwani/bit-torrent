@@ -16,8 +16,8 @@ export interface PeerListResponse {
 
 export interface DownloadResponse {
     message: string;
-    outputPath: string;
-    numberOfPieces: number;
+    filePath: string;
+    totalPieces: number;
     error?: string;
 }
 
@@ -63,7 +63,22 @@ export const torrentApi = {
             method: 'POST',
             body: formData
         });
-        return response.json();
+        const data: DownloadResponse = await response.json();
+
+        if (!data.error && data.filePath) {
+            const fileResponse = await fetch(`${API_BASE_URL}/file?path=${encodeURIComponent(data.filePath)}`);
+            const blob = await fileResponse.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = data.filePath.split('/').pop() || 'download';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        }
+
+        return data;
     },
 
     parseMagnet: async (magnetUrl: string): Promise<MagnetParseResponse> => {
@@ -96,7 +111,22 @@ export const torrentApi = {
             },
             body: JSON.stringify({ magnetUrl })
         });
-        return response.json();
+        const data: DownloadResponse = await response.json();
+
+        if (!data.error && data.filePath) {
+            const fileResponse = await fetch(`${API_BASE_URL}/file?path=${encodeURIComponent(data.filePath)}`);
+            const blob = await fileResponse.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = data.filePath.split('/').pop() || 'download';
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            a.remove();
+        }
+
+        return data;
     },
 
     decodeBencode: async (bencodedValue: string): Promise<DecodeResponse> => {

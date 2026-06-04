@@ -61,17 +61,10 @@ public class TorrentService implements ITorrentService{
         String fileName = file.getOriginalFilename().replace(".torrent", "");
         String outputPath = DOWNLOAD_DIR + fileName;
 
-        // Start download in a separate thread
-        new Thread(() -> {
-            try {
-                TorrentDownloader.downloadTorrent(torrent, outputPath, false);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }).start();
+        TorrentDownloader.downloadTorrent(torrent, outputPath, false);
 
         return new DownloadResponse(
-                "Download started for: " + fileName,
+                "Download completed for: " + fileName,
                 outputPath,
                 torrent.getPieces().size(),
                 null
@@ -126,17 +119,10 @@ public class TorrentService implements ITorrentService{
         String fileName = "magnet_" + System.currentTimeMillis();
         String outputPath = DOWNLOAD_DIR + fileName;
 
-        // Start download in a separate thread
-        new Thread(() -> {
-            try {
-                TorrentDownloader.downloadTorrent(torrent, outputPath, true);
-            } catch (Exception e) {
-                e.printStackTrace();
-            }
-        }).start();
+        TorrentDownloader.downloadTorrent(torrent, outputPath, true);
 
         return new DownloadResponse(
-                "Download started for magnet link",
+                "Download completed for magnet link",
                 outputPath,
                 torrent.getPieces().size(),
                 null
