@@ -12,6 +12,8 @@ public final class Torrent {
 
     private final String trackerURL;
 
+    private final List<String> trackerURLs;
+
     private final long length;
 
     private final String infoHash;
@@ -25,6 +27,26 @@ public final class Torrent {
         Map<String, Object> decodedDict = bencode.decode(fileBytes, Type.DICTIONARY);
         Map<String, Object> infoDict = (Map<String, Object>) decodedDict.get("info");
         String trackerURL = (String) decodedDict.get("announce");
+
+        // Parse announce-list for multiple trackers
+        List<String> trackerURLs = new ArrayList<>();
+        if (trackerURL != null) {
+            trackerURLs.add(trackerURL);
+        }
+        Object announceList = decodedDict.get("announce-list");
+        if (announceList instanceof List) {
+            for (Object tier : (List<?>) announceList) {
+                if (tier instanceof List) {
+                    for (Object url : (List<?>) tier) {
+                        String urlStr = url.toString();
+                        if (!trackerURLs.contains(urlStr)) {
+                            trackerURLs.add(urlStr);
+                        }
+                    }
+                }
+            }
+        }
+
         long length;
         if (infoDict.containsKey("length")) {
             length = ((Number) infoDict.get("length")).longValue();
@@ -45,6 +67,7 @@ public final class Torrent {
 
         return new Torrent.Builder()
                 .setTrackerURL(trackerURL)
+                .setTrackerURLs(trackerURLs)
                 .setLength(length)
                 .setInfoHash(infoHash)
                 .setPieceLength(pieceLength)
@@ -54,6 +77,7 @@ public final class Torrent {
 
     private Torrent(Builder builder) {
         this.trackerURL = builder.trackerURL;
+        this.trackerURLs = builder.trackerURLs != null ? builder.trackerURLs : new ArrayList<>();
         this.length = builder.length;
         this.infoHash = builder.infoHash;
         this.pieceLength = builder.pieceLength;
@@ -73,6 +97,7 @@ public final class Torrent {
 
     public static class Builder {
         private String trackerURL;
+        private List<String> trackerURLs;
         private long length;
         private String infoHash;
         private long pieceLength;
@@ -80,6 +105,11 @@ public final class Torrent {
 
         public Builder setTrackerURL(String trackerURL) {
             this.trackerURL = trackerURL;
+            return this;
+        }
+
+        public Builder setTrackerURLs(List<String> trackerURLs) {
+            this.trackerURLs = trackerURLs;
             return this;
         }
 
@@ -111,6 +141,10 @@ public final class Torrent {
 
     public String getTrackerURL() {
         return trackerURL;
+    }
+
+    public List<String> getTrackerURLs() {
+        return trackerURLs;
     }
 
     public long getLength() {

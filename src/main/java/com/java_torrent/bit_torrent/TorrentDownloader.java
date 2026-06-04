@@ -247,30 +247,49 @@ public class TorrentDownloader {
     }
 
     public static List<String> getPeerList(Torrent torrent) throws Exception {
-        String url = torrent.getTrackerURL();
-        byte[] infoHashBytes = Utils.hexStringToByteArray(torrent.getInfoHash());
-        byte[] peerIdBytes = generatePeerId();
-
-        if (url.startsWith("udp://")) {
-            return UdpTrackerService.getPeerList(url, infoHashBytes, peerIdBytes, torrent.getLength());
+        List<String> trackerURLs = torrent.getTrackerURLs();
+        if (trackerURLs == null || trackerURLs.isEmpty()) {
+            trackerURLs = new ArrayList<>();
+            if (torrent.getTrackerURL() != null) {
+                trackerURLs.add(torrent.getTrackerURL());
+            }
         }
 
-        String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
-        String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
+        byte[] infoHashBytes = Utils.hexStringToByteArray(torrent.getInfoHash());
+        byte[] peerIdBytes = generatePeerId();
+        List<String> errors = new ArrayList<>();
 
-        HttpClientService httpClientService = new HttpClientService();
-        String requestURL = httpClientService.newRequestURLBuilder(url)
-                .addParam("info_hash", infoHash)
-                .addParam("peer_id", peerId)
-                .addParam("port", String.valueOf(PORT))
-                .addParam("uploaded", "0")
-                .addParam("downloaded", "0")
-                .addParam("left", String.valueOf(torrent.getLength()))
-                .addParam("compact", "1")
-                .build();
+        for (String url : trackerURLs) {
+            try {
+                if (url.startsWith("udp://")) {
+                    List<String> peers = UdpTrackerService.getPeerList(url, infoHashBytes, peerIdBytes, torrent.getLength());
+                    if (!peers.isEmpty()) return peers;
+                } else if (url.startsWith("http://") || url.startsWith("https://")) {
+                    String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
+                    String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
 
-        HttpResponse<byte[]> response = httpClientService.sendGetRequest(requestURL);
-        return getPeerListFromHTTPResponse(response);
+                    HttpClientService httpClientService = new HttpClientService();
+                    String requestURL = httpClientService.newRequestURLBuilder(url)
+                            .addParam("info_hash", infoHash)
+                            .addParam("peer_id", peerId)
+                            .addParam("port", String.valueOf(PORT))
+                            .addParam("uploaded", "0")
+                            .addParam("downloaded", "0")
+                            .addParam("left", String.valueOf(torrent.getLength()))
+                            .addParam("compact", "1")
+                            .build();
+
+                    HttpResponse<byte[]> response = httpClientService.sendGetRequest(requestURL);
+                    List<String> peers = getPeerListFromHTTPResponse(response);
+                    if (!peers.isEmpty()) return peers;
+                }
+            } catch (Exception e) {
+                errors.add(url + ": " + e.getMessage());
+                System.out.println("Tracker " + url + " failed: " + e.getMessage());
+            }
+        }
+
+        throw new RuntimeException("All trackers failed: " + String.join("; ", errors));
     }
 
     public static List<String> getPeerListFromMagnetInfo(Map<String, String> magnetInfoMap) {
