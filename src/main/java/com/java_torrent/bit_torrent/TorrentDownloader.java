@@ -274,39 +274,55 @@ public class TorrentDownloader {
     }
 
     public static List<String> getPeerListFromMagnetInfo(Map<String, String> magnetInfoMap) {
-        String trackerUrl = magnetInfoMap.get("tr");
         String infoHashHex = magnetInfoMap.get("xt").split(":")[2];
         byte[] infoHashBytes = Utils.hexStringToByteArray(infoHashHex);
         byte[] peerIdBytes = generatePeerId();
+        List<String> trackerUrls = TorrentUtils.getTrackerList(magnetInfoMap);
+        List<String> errors = new ArrayList<>();
 
-        if (trackerUrl.startsWith("udp://")) {
+        for (String trackerUrl : trackerUrls) {
             try {
-                return UdpTrackerService.getPeerList(trackerUrl, infoHashBytes, peerIdBytes, 1);
+                if (trackerUrl.startsWith("udp://")) {
+                    List<String> peers = UdpTrackerService.getPeerList(trackerUrl, infoHashBytes, peerIdBytes, 1);
+                    if (!peers.isEmpty()) return peers;
+                } else if (trackerUrl.startsWith("http://") || trackerUrl.startsWith("https://")) {
+                    String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
+                    String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
+                    HttpClientService httpClientService = new HttpClientService();
+                    String requestURL = httpClientService.newRequestURLBuilder(trackerUrl)
+                            .addParam("info_hash", infoHash)
+                            .addParam("dn", magnetInfoMap.getOrDefault("dn", ""))
+                            .addParam("port", String.valueOf(PORT))
+                            .addParam("downloaded", "0")
+                            .addParam("uploaded", "0")
+                            .addParam("left", "1")
+                            .addParam("compact", "1")
+                            .addParam("peer_id", peerId)
+                            .build();
+                    HttpResponse<byte[]> response = httpClientService.sendGetRequest(requestURL);
+                    List<String> peers = getPeerListFromHTTPResponse(response);
+                    if (!peers.isEmpty()) return peers;
+                }
             } catch (Exception e) {
-                throw new RuntimeException("Error getting peer list from UDP tracker: " + e.getMessage());
+                errors.add(trackerUrl + ": " + e.getMessage());
+                System.out.println("Tracker " + trackerUrl + " failed: " + e.getMessage());
             }
         }
 
-        String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
-        String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
-
-        HttpClientService httpClientService = new HttpClientService();
-        String requestURL = httpClientService.newRequestURLBuilder(trackerUrl)
-                .addParam("info_hash", infoHash)
-                .addParam("dn", magnetInfoMap.get("dn"))
-                .addParam("port", String.valueOf(PORT))
-                .addParam("downloaded", "0")
-                .addParam("uploaded", "0")
-                .addParam("left", "1")
-                .addParam("compact", "1")
-                .addParam("peer_id", peerId)
-                .build();
-        try {
-            HttpResponse<byte[]> response = httpClientService.sendGetRequest(requestURL);
-            return getPeerListFromHTTPResponse(response);
-        } catch (Exception e) {
-            throw new RuntimeException("Error getting peer list from tracker: " + e.getMessage());
+        // Fallback: try xs (exact source) URL to download .torrent file directly
+        String xs = magnetInfoMap.get("xs");
+        if (xs != null) {
+            try {
+                HttpClientService httpClientService = new HttpClientService();
+                HttpResponse<byte[]> response = httpClientService.sendGetRequest(xs);
+                Torrent torrent = Torrent.fromBytes(response.body());
+                return getPeerList(torrent);
+            } catch (Exception e) {
+                errors.add("xs fallback: " + e.getMessage());
+            }
         }
+
+        throw new RuntimeException("All trackers failed: " + String.join("; ", errors));
     }
 
     private static byte[] generatePeerId() {

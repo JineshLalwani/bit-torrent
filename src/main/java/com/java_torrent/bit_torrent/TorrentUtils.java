@@ -39,17 +39,35 @@ public class TorrentUtils {
             if (keyValue[0].equals("tr")) {
                 trackers.add(URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8));
             } else {
-                map.put(keyValue[0], keyValue[1]);
+                String key = keyValue[0];
+                String value = URLDecoder.decode(keyValue[1], StandardCharsets.UTF_8);
+                map.put(key, value);
             }
         }
-        // Pick the first supported tracker: HTTP/HTTPS or UDP, skip wss://
-        String selectedTracker = trackers.stream()
-                .filter(t -> t.startsWith("http://") || t.startsWith("https://") || t.startsWith("udp://"))
-                .findFirst()
-                .orElse(trackers.isEmpty() ? null : trackers.get(0));
-        if (selectedTracker != null) {
-            map.put("tr", selectedTracker);
+        // Store all supported trackers (HTTP/HTTPS first, then UDP, skip wss://)
+        List<String> supported = new ArrayList<>();
+        // HTTP/HTTPS trackers first (work on all hosting platforms)
+        trackers.stream()
+                .filter(t -> t.startsWith("http://") || t.startsWith("https://"))
+                .forEach(supported::add);
+        // Then UDP trackers
+        trackers.stream()
+                .filter(t -> t.startsWith("udp://"))
+                .forEach(supported::add);
+
+        if (!supported.isEmpty()) {
+            map.put("tr", supported.get(0));
         }
+        map.put("trackers", String.join(",", supported));
         return map;
+    }
+
+    public static List<String> getTrackerList(Map<String, String> magnetInfoMap) {
+        String trackers = magnetInfoMap.get("trackers");
+        if (trackers == null || trackers.isEmpty()) {
+            String single = magnetInfoMap.get("tr");
+            return single != null ? List.of(single) : List.of();
+        }
+        return List.of(trackers.split(","));
     }
 }
