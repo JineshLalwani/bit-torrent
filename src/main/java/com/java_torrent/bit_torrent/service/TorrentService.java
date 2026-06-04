@@ -160,7 +160,20 @@ public class TorrentService implements ITorrentService{
         String infoHash = params.get("xt").split(":")[2];
         String trackerURL = params.get("tr");
 
-        // Try peer handshake first
+        // Try xs (exact source) URL first — fast HTTPS download of .torrent file
+        String xs = params.get("xs");
+        if (xs != null) {
+            try {
+                HttpClientService httpClientService = new HttpClientService();
+                HttpResponse<byte[]> response = httpClientService.sendGetRequest(xs);
+                Torrent torrent = Torrent.fromBytes(response.body());
+                return Pair.of(torrent, null);
+            } catch (Exception e) {
+                System.out.println("xs fallback failed: " + e.getMessage());
+            }
+        }
+
+        // Fall back to peer handshake for metadata
         Pair<TCPService, Long> handshakeResult = TorrentDownloader.performMagnetHandshake(magnetURL);
 
         if (handshakeResult != null && handshakeResult.getLeft() != null) {
@@ -189,19 +202,6 @@ public class TorrentService implements ITorrentService{
                     .build(), tcpService);
         }
 
-        // Fallback: try xs (exact source) URL to download .torrent file directly
-        String xs = params.get("xs");
-        if (xs != null) {
-            try {
-                HttpClientService httpClientService = new HttpClientService();
-                HttpResponse<byte[]> response = httpClientService.sendGetRequest(xs);
-                Torrent torrent = Torrent.fromBytes(response.body());
-                return Pair.of(torrent, null);
-            } catch (Exception e) {
-                throw new RuntimeException("Failed to connect to peers and xs fallback failed: " + e.getMessage());
-            }
-        }
-
-        throw new RuntimeException("Failed to connect to any peers and no xs (exact source) URL available");
+        throw new RuntimeException("Failed to get torrent metadata: no xs URL available and could not connect to any peers");
     }
 }

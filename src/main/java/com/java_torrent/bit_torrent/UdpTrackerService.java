@@ -11,7 +11,7 @@ public class UdpTrackerService {
     private static final long CONNECT_MAGIC = 0x41727101980L;
     private static final int ACTION_CONNECT = 0;
     private static final int ACTION_ANNOUNCE = 1;
-    private static final int TIMEOUT_MS = 5000;
+    private static final int TIMEOUT_MS = 3000;
 
     /**
      * Fetches a peer list from a UDP tracker.
@@ -58,33 +58,30 @@ public class UdpTrackerService {
         byte[] sendData = sendBuf.array();
         DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, address, port);
 
-        // Retry up to 3 times
-        for (int attempt = 0; attempt < 3; attempt++) {
-            socket.send(sendPacket);
+        socket.send(sendPacket);
 
-            byte[] recvData = new byte[16];
-            DatagramPacket recvPacket = new DatagramPacket(recvData, recvData.length);
+        byte[] recvData = new byte[16];
+        DatagramPacket recvPacket = new DatagramPacket(recvData, recvData.length);
 
-            try {
-                socket.receive(recvPacket);
-                ByteBuffer recvBuf = ByteBuffer.wrap(recvData);
-                int action = recvBuf.getInt();
-                int recvTransactionId = recvBuf.getInt();
-                long connectionId = recvBuf.getLong();
-
-                if (action != ACTION_CONNECT) {
-                    throw new RuntimeException("UDP tracker connect failed: unexpected action " + action);
-                }
-                if (recvTransactionId != transactionId) {
-                    throw new RuntimeException("UDP tracker connect failed: transaction ID mismatch");
-                }
-
-                return connectionId;
-            } catch (SocketTimeoutException e) {
-                if (attempt == 2) throw new RuntimeException("UDP tracker connect timed out after 3 attempts");
-            }
+        try {
+            socket.receive(recvPacket);
+        } catch (SocketTimeoutException e) {
+            throw new RuntimeException("UDP tracker connect timed out (UDP may be blocked)");
         }
-        throw new RuntimeException("UDP tracker connect failed");
+
+        ByteBuffer recvBuf = ByteBuffer.wrap(recvData);
+        int action = recvBuf.getInt();
+        int recvTransactionId = recvBuf.getInt();
+        long connectionId = recvBuf.getLong();
+
+        if (action != ACTION_CONNECT) {
+            throw new RuntimeException("UDP tracker connect failed: unexpected action " + action);
+        }
+        if (recvTransactionId != transactionId) {
+            throw new RuntimeException("UDP tracker connect failed: transaction ID mismatch");
+        }
+
+        return connectionId;
     }
 
     private static List<String> sendAnnounce(DatagramSocket socket, InetAddress address, int port,
@@ -111,53 +108,48 @@ public class UdpTrackerService {
         byte[] sendData = sendBuf.array();
         DatagramPacket sendPacket = new DatagramPacket(sendData, sendData.length, address, port);
 
-        for (int attempt = 0; attempt < 3; attempt++) {
-            socket.send(sendPacket);
+        socket.send(sendPacket);
 
-            byte[] recvData = new byte[65535];
-            DatagramPacket recvPacket = new DatagramPacket(recvData, recvData.length);
+        byte[] recvData = new byte[65535];
+        DatagramPacket recvPacket = new DatagramPacket(recvData, recvData.length);
 
-            try {
-                socket.receive(recvPacket);
-                ByteBuffer recvBuf = ByteBuffer.wrap(recvData, 0, recvPacket.getLength());
-
-                int action = recvBuf.getInt();
-                int recvTransactionId = recvBuf.getInt();
-
-                if (action == 3) {
-                    // Error response
-                    byte[] msgBytes = new byte[recvPacket.getLength() - 8];
-                    recvBuf.get(msgBytes);
-                    throw new RuntimeException("UDP tracker error: " + new String(msgBytes));
-                }
-
-                if (action != ACTION_ANNOUNCE) {
-                    throw new RuntimeException("UDP tracker announce failed: unexpected action " + action);
-                }
-                if (recvTransactionId != transactionId) {
-                    throw new RuntimeException("UDP tracker announce failed: transaction ID mismatch");
-                }
-
-                int interval = recvBuf.getInt();    // 4: interval
-                int leechers = recvBuf.getInt();     // 4: leechers
-                int seeders = recvBuf.getInt();      // 4: seeders
-
-                // Parse peers: 6 bytes each (4 IP + 2 port)
-                List<String> peers = new ArrayList<>();
-                while (recvBuf.remaining() >= 6) {
-                    int ip1 = recvBuf.get() & 0xFF;
-                    int ip2 = recvBuf.get() & 0xFF;
-                    int ip3 = recvBuf.get() & 0xFF;
-                    int ip4 = recvBuf.get() & 0xFF;
-                    int peerPort = recvBuf.getShort() & 0xFFFF;
-                    peers.add(ip1 + "." + ip2 + "." + ip3 + "." + ip4 + ":" + peerPort);
-                }
-
-                return peers;
-            } catch (SocketTimeoutException e) {
-                if (attempt == 2) throw new RuntimeException("UDP tracker announce timed out after 3 attempts");
-            }
+        try {
+            socket.receive(recvPacket);
+        } catch (SocketTimeoutException e) {
+            throw new RuntimeException("UDP tracker announce timed out (UDP may be blocked)");
         }
-        throw new RuntimeException("UDP tracker announce failed");
+
+        ByteBuffer recvBuf = ByteBuffer.wrap(recvData, 0, recvPacket.getLength());
+        int action = recvBuf.getInt();
+        int recvTransactionId = recvBuf.getInt();
+
+        if (action == 3) {
+            byte[] msgBytes = new byte[recvPacket.getLength() - 8];
+            recvBuf.get(msgBytes);
+            throw new RuntimeException("UDP tracker error: " + new String(msgBytes));
+        }
+
+        if (action != ACTION_ANNOUNCE) {
+            throw new RuntimeException("UDP tracker announce failed: unexpected action " + action);
+        }
+        if (recvTransactionId != transactionId) {
+            throw new RuntimeException("UDP tracker announce failed: transaction ID mismatch");
+        }
+
+        int interval = recvBuf.getInt();
+        int leechers = recvBuf.getInt();
+        int seeders = recvBuf.getInt();
+
+        List<String> peers = new ArrayList<>();
+        while (recvBuf.remaining() >= 6) {
+            int ip1 = recvBuf.get() & 0xFF;
+            int ip2 = recvBuf.get() & 0xFF;
+            int ip3 = recvBuf.get() & 0xFF;
+            int ip4 = recvBuf.get() & 0xFF;
+            int peerPort = recvBuf.getShort() & 0xFFFF;
+            peers.add(ip1 + "." + ip2 + "." + ip3 + "." + ip4 + ":" + peerPort);
+        }
+
+        return peers;
     }
 }
