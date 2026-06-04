@@ -10,6 +10,7 @@ import org.springframework.web.multipart.MultipartFile;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.PrintStream;
+import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -86,7 +87,13 @@ public class TorrentService implements ITorrentService{
 
     @Override
     public TorrentInfoResponse getMagnetInfo(String magnetUrl) throws Exception {
-        Torrent torrent = getTorrentFromMagnetURL(magnetUrl).getLeft();
+        Pair<Torrent, TCPService> result = getTorrentFromMagnetURL(magnetUrl);
+        Torrent torrent = result.getLeft();
+        TCPService tcpService = result.getRight();
+
+        if (tcpService != null) {
+            try { tcpService.close(); } catch (IOException ignored) {}
+        }
 
         return new TorrentInfoResponse(
                 torrent.getTrackerURL(),
@@ -104,10 +111,8 @@ public class TorrentService implements ITorrentService{
         Torrent torrent = pair.getLeft();
         TCPService tcpService = pair.getRight();
 
-        try {
-            tcpService.close();
-        } catch (IOException e) {
-            throw new RuntimeException(e);
+        if (tcpService != null) {
+            try { tcpService.close(); } catch (IOException ignored) {}
         }
 
         // Create downloads directory if it doesn't exist
@@ -154,33 +159,49 @@ public class TorrentService implements ITorrentService{
         Map<String, String> params = TorrentUtils.getParamsFromMagnetURL(magnetURL);
         String infoHash = params.get("xt").split(":")[2];
         String trackerURL = params.get("tr");
+
+        // Try peer handshake first
         Pair<TCPService, Long> handshakeResult = TorrentDownloader.performMagnetHandshake(magnetURL);
-        TCPService tcpService = handshakeResult.getLeft();
-        long extensionId = handshakeResult.getRight();
 
-        if (tcpService == null) {
-            throw new RuntimeException("Failed to connect to any peers");
+        if (handshakeResult != null && handshakeResult.getLeft() != null) {
+            TCPService tcpService = handshakeResult.getLeft();
+            long extensionId = handshakeResult.getRight();
+
+            byte[] metadataRequestMessage = TorrentDownloader.createMetadataRequestMessage(0, 0, extensionId);
+            tcpService.sendMessage(metadataRequestMessage);
+            byte[] metadataResponse = tcpService.waitForMessage();
+            Map<String, Object> metadataPieceDict = TorrentDownloader.getMetadataFromMessage(metadataResponse);
+            String calculatedInfoHash = Utils.calculateSHA1(new Bencode(true).encode(metadataPieceDict));
+
+            if (!calculatedInfoHash.equals(infoHash)) {
+                throw new RuntimeException("Info hash mismatch, expected " + infoHash + " but got " + calculatedInfoHash);
+            }
+
+            byte[] pieceHashBytes = ((ByteBuffer) metadataPieceDict.get("pieces")).array();
+            List<String> pieceHashes = TorrentUtils.splitPieceHashes(pieceHashBytes, 20, new ArrayList<>());
+
+            return Pair.of(new Torrent.Builder()
+                    .setTrackerURL(trackerURL)
+                    .setLength(((Number) metadataPieceDict.get("length")).longValue())
+                    .setInfoHash(infoHash)
+                    .setPieceLength(((Number) metadataPieceDict.get("piece length")).longValue())
+                    .setPieces(pieceHashes)
+                    .build(), tcpService);
         }
 
-        byte[] metadataRequestMessage = TorrentDownloader.createMetadataRequestMessage(0, 0, extensionId);
-        tcpService.sendMessage(metadataRequestMessage);
-        byte[] metadataResponse = tcpService.waitForMessage();
-        Map<String, Object> metadataPieceDict = TorrentDownloader.getMetadataFromMessage(metadataResponse);
-        String calculatedInfoHash = Utils.calculateSHA1(new Bencode(true).encode(metadataPieceDict));
-
-        if (!calculatedInfoHash.equals(infoHash)) {
-            throw new RuntimeException("Info hash mismatch, expected " + infoHash + " but got " + calculatedInfoHash);
+        // Fallback: try xs (exact source) URL to download .torrent file directly
+        String xs = params.get("xs");
+        if (xs != null) {
+            try {
+                HttpClientService httpClientService = new HttpClientService();
+                HttpResponse<byte[]> response = httpClientService.sendGetRequest(xs);
+                Torrent torrent = Torrent.fromBytes(response.body());
+                return Pair.of(torrent, null);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to connect to peers and xs fallback failed: " + e.getMessage());
+            }
         }
 
-        byte[] pieceHashBytes = ((ByteBuffer) metadataPieceDict.get("pieces")).array();
-        List<String> pieceHashes = TorrentUtils.splitPieceHashes(pieceHashBytes, 20, new ArrayList<>());
-
-        return Pair.of(new Torrent.Builder()
-                .setTrackerURL(trackerURL)
-                .setLength(((Number) metadataPieceDict.get("length")).longValue())
-                .setInfoHash(infoHash)
-                .setPieceLength(((Number) metadataPieceDict.get("piece length")).longValue())
-                .setPieces(pieceHashes)
-                .build(), tcpService);
+        throw new RuntimeException("Failed to connect to any peers and no xs (exact source) URL available");
     }
 }

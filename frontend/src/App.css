@@ -248,3 +248,126 @@ header h1 {
     opacity: 1;
   }
 }
+
+.file-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 1rem;
+}
+
+.file-table th {
+  text-align: left;
+  padding: 0.75rem;
+  border-bottom: 2px solid #667eea;
+  color: #667eea;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.file-table td {
+  padding: 0.75rem;
+  border-bottom: 1px solid #eee;
+  color: #333;
+  font-size: 0.9rem;
+}
+
+.file-table tr:hover {
+  background: #f8f9fa;
+}
+
+.info-hash {
+  font-family: 'Courier New', monospace;
+  font-size: 0.8rem;
+  color: #764ba2;
+  cursor: help;
+}
+
+.btn-download {
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  font-weight: 500;
+}
+
+.btn-download:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.4);
+}
+
+.btn-download:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.upload-success {
+  background: #f0fdf4;
+  border: 1px solid #86efac;
+  border-radius: 8px;
+  padding: 1rem;
+  margin-top: 1rem;
+}
+
+.upload-success p {
+  margin-bottom: 0.4rem;
+  font-size: 0.9rem;
+}
+
+.upload-success .label {
+  color: #555;
+}
+
+.upload-success .value {
+  font-family: 'Courier New', monospace;
+  color: #333;
+  word-break: break-all;
+}
+
+.ephemeral-warning {
+  background: rgba(255, 255, 255, 0.1);
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+  text-align: center;
+  backdrop-filter: blur(10px);
+}
+
+.empty-state {
+  text-align: center;
+  padding: 2rem;
+  color: #999;
+}
+
+.btn-refresh {
+  background: none;
+  border: 2px solid #667eea;
+  color: #667eea;
+  padding: 0.4rem 0.8rem;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-weight: 500;
+  transition: all 0.3s ease;
+}
+
+.btn-refresh:hover {
+  background: #667eea;
+  color: white;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1rem;
+}
+
+.card-header h2 {
+  margin-bottom: 0;
+}

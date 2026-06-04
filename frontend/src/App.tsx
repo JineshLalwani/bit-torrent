@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import TorrentTab from './components/TorrentTab';
 import MagnetTab from './components/MagnetTab';
 import DecodeTab from './components/DecodeTab';
+import FileHubTab from './components/FileHubTab';
 import './App.css';
 
-type TabType = 'torrent' | 'magnet' | 'decode';
+type TabType = 'torrent' | 'magnet' | 'decode' | 'filehub';
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('torrent');
@@ -36,11 +37,18 @@ function App() {
           >
             Decode
           </button>
+          <button
+            className={`tab-btn ${activeTab === 'filehub' ? 'active' : ''}`}
+            onClick={() => setActiveTab('filehub')}
+          >
+            File Hub
+          </button>
         </div>
 
         {activeTab === 'torrent' && <TorrentTab />}
         {activeTab === 'magnet' && <MagnetTab />}
         {activeTab === 'decode' && <DecodeTab />}
+        {activeTab === 'filehub' && <FileHubTab />}
       </div>
     </div>
   );

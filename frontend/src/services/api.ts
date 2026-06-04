@@ -1,4 +1,7 @@
 const API_BASE_URL = process.env.REACT_APP_API_URL || 'http://localhost:8080/api/torrent';
+const FILES_API_URL = process.env.REACT_APP_API_URL
+    ? process.env.REACT_APP_API_URL.replace('/api/torrent', '/api/files')
+    : 'http://localhost:8080/api/files';
 
 export interface TorrentInfoResponse {
     trackerURL: string;
@@ -138,5 +141,51 @@ export const torrentApi = {
             body: JSON.stringify({ bencodedValue })
         });
         return response.json();
+    }
+};
+
+export interface SharedFileInfo {
+    id: string;
+    fileName: string;
+    fileSize: number;
+    infoHash: string;
+    pieceCount: number;
+    pieceLength: number;
+    uploadedAt: string;
+    error?: string;
+}
+
+export interface FileListResponse {
+    files: SharedFileInfo[];
+    error?: string;
+}
+
+export const fileShareApi = {
+    uploadFile: async (file: File): Promise<SharedFileInfo> => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await fetch(`${FILES_API_URL}/upload`, {
+            method: 'POST',
+            body: formData
+        });
+        return response.json();
+    },
+
+    listFiles: async (): Promise<FileListResponse> => {
+        const response = await fetch(`${FILES_API_URL}/list`);
+        return response.json();
+    },
+
+    downloadFile: async (fileId: string, fileName: string): Promise<void> => {
+        const response = await fetch(`${FILES_API_URL}/download/${fileId}`);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = fileName;
+        document.body.appendChild(a);
+        a.click();
+        window.URL.revokeObjectURL(url);
+        a.remove();
     }
 };
