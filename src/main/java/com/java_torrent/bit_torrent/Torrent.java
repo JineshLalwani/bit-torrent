@@ -4,6 +4,7 @@ import com.dampcake.bencode.Bencode;
 import com.dampcake.bencode.Type;
 
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -22,11 +23,19 @@ public final class Torrent {
 
     private final List<String> pieces;
 
+    private static String bufToString(Object val) {
+        if (val instanceof ByteBuffer) {
+            return new String(((ByteBuffer) val).array(), StandardCharsets.UTF_8);
+        }
+        return val != null ? val.toString() : null;
+    }
+
     public static Torrent fromBytes(byte[] fileBytes) {
-        Bencode bencode = new Bencode(false);
+        // Use raw mode (true) to avoid UTF-8 decode errors on binary fields like pieces
+        Bencode bencode = new Bencode(true);
         Map<String, Object> decodedDict = bencode.decode(fileBytes, Type.DICTIONARY);
         Map<String, Object> infoDict = (Map<String, Object>) decodedDict.get("info");
-        String trackerURL = (String) decodedDict.get("announce");
+        String trackerURL = bufToString(decodedDict.get("announce"));
 
         // Parse announce-list for multiple trackers
         List<String> trackerURLs = new ArrayList<>();
@@ -38,8 +47,8 @@ public final class Torrent {
             for (Object tier : (List<?>) announceList) {
                 if (tier instanceof List) {
                     for (Object url : (List<?>) tier) {
-                        String urlStr = url.toString();
-                        if (!trackerURLs.contains(urlStr)) {
+                        String urlStr = bufToString(url);
+                        if (urlStr != null && !trackerURLs.contains(urlStr)) {
                             trackerURLs.add(urlStr);
                         }
                     }
@@ -58,12 +67,10 @@ public final class Torrent {
                 length += ((Number) file.get("length")).longValue();
             }
         }
-        long pieceLength = (long) infoDict.get("piece length");
-        Bencode bencode2 = new Bencode(true);
-        Map<String, Object> bencodedInfoDict = (Map<String, Object>) bencode2.decode(fileBytes, Type.DICTIONARY).get("info");
-        byte[] pieceHashBytes = ((ByteBuffer) bencodedInfoDict.get("pieces")).array();
+        long pieceLength = ((Number) infoDict.get("piece length")).longValue();
+        byte[] pieceHashBytes = ((ByteBuffer) infoDict.get("pieces")).array();
         List<String> pieces = TorrentUtils.splitPieceHashes(pieceHashBytes, 20, new ArrayList<>());
-        String infoHash = Utils.calculateSHA1(bencode2.encode(bencodedInfoDict));
+        String infoHash = Utils.calculateSHA1(bencode.encode(infoDict));
 
         return new Torrent.Builder()
                 .setTrackerURL(trackerURL)
