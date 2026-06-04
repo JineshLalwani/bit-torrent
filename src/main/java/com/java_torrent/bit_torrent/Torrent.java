@@ -25,7 +25,17 @@ public final class Torrent {
         Map<String, Object> decodedDict = bencode.decode(fileBytes, Type.DICTIONARY);
         Map<String, Object> infoDict = (Map<String, Object>) decodedDict.get("info");
         String trackerURL = (String) decodedDict.get("announce");
-        long length = (long) infoDict.get("length");
+        long length;
+        if (infoDict.containsKey("length")) {
+            length = ((Number) infoDict.get("length")).longValue();
+        } else {
+            // Multi-file torrent: sum up all file lengths
+            List<Map<String, Object>> files = (List<Map<String, Object>>) infoDict.get("files");
+            length = 0;
+            for (Map<String, Object> file : files) {
+                length += ((Number) file.get("length")).longValue();
+            }
+        }
         long pieceLength = (long) infoDict.get("piece length");
         Bencode bencode2 = new Bencode(true);
         Map<String, Object> bencodedInfoDict = (Map<String, Object>) bencode2.decode(fileBytes, Type.DICTIONARY).get("info");

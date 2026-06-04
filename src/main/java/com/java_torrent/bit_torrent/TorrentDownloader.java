@@ -246,15 +246,20 @@ public class TorrentDownloader {
         }
     }
 
-    public static List<String> getPeerList(Torrent torrent) throws URISyntaxException, IOException, InterruptedException {
+    public static List<String> getPeerList(Torrent torrent) throws Exception {
         String url = torrent.getTrackerURL();
-        String infoHash = new String(Utils.hexStringToByteArray(torrent.getInfoHash()),
-                StandardCharsets.ISO_8859_1);
-        byte[] peerIdBytes = Utils.getRandomBytes(10);
-        String peerId = Utils.byteToHexString(peerIdBytes);
+        byte[] infoHashBytes = Utils.hexStringToByteArray(torrent.getInfoHash());
+        byte[] peerIdBytes = generatePeerId();
+
+        if (url.startsWith("udp://")) {
+            return UdpTrackerService.getPeerList(url, infoHashBytes, peerIdBytes, torrent.getLength());
+        }
+
+        String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
+        String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
 
         HttpClientService httpClientService = new HttpClientService();
-        String requestURL = httpClientService.newRequestURLBuilder(torrent.getTrackerURL())
+        String requestURL = httpClientService.newRequestURLBuilder(url)
                 .addParam("info_hash", infoHash)
                 .addParam("peer_id", peerId)
                 .addParam("port", String.valueOf(PORT))
@@ -269,15 +274,24 @@ public class TorrentDownloader {
     }
 
     public static List<String> getPeerListFromMagnetInfo(Map<String, String> magnetInfoMap) {
-        // parse the magnet URL to extract the xt, dn, and tr parameters
-        // perform a GET request to the tracker URL
-        String infoHash = new String(Utils.hexStringToByteArray(magnetInfoMap.get("xt").split(":")[2]),
-                StandardCharsets.ISO_8859_1);
-        byte[] peerIdBytes = Utils.getRandomBytes(10);
-        String peerId = Utils.byteToHexString(peerIdBytes);
+        String trackerUrl = magnetInfoMap.get("tr");
+        String infoHashHex = magnetInfoMap.get("xt").split(":")[2];
+        byte[] infoHashBytes = Utils.hexStringToByteArray(infoHashHex);
+        byte[] peerIdBytes = generatePeerId();
+
+        if (trackerUrl.startsWith("udp://")) {
+            try {
+                return UdpTrackerService.getPeerList(trackerUrl, infoHashBytes, peerIdBytes, 1);
+            } catch (Exception e) {
+                throw new RuntimeException("Error getting peer list from UDP tracker: " + e.getMessage());
+            }
+        }
+
+        String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
+        String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
 
         HttpClientService httpClientService = new HttpClientService();
-        String requestURL = httpClientService.newRequestURLBuilder(magnetInfoMap.get("tr"))
+        String requestURL = httpClientService.newRequestURLBuilder(trackerUrl)
                 .addParam("info_hash", infoHash)
                 .addParam("dn", magnetInfoMap.get("dn"))
                 .addParam("port", String.valueOf(PORT))
@@ -293,6 +307,15 @@ public class TorrentDownloader {
         } catch (Exception e) {
             throw new RuntimeException("Error getting peer list from tracker: " + e.getMessage());
         }
+    }
+
+    private static byte[] generatePeerId() {
+        byte[] peerId = new byte[20];
+        byte[] prefix = "-BT0001-".getBytes(StandardCharsets.US_ASCII);
+        System.arraycopy(prefix, 0, peerId, 0, prefix.length);
+        byte[] random = Utils.getRandomBytes(20 - prefix.length);
+        System.arraycopy(random, 0, peerId, prefix.length, random.length);
+        return peerId;
     }
 
     public static byte[] createExtensionHandshakeMessage(List<String> extensionList) {
