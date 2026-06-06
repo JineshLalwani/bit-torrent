@@ -426,12 +426,18 @@ public class TorrentDownloader {
 
     public static Pair<TCPService, Long> performMagnetHandshake(String magnetURL) {
         Map<String, String> magnetInfo = TorrentUtils.getParamsFromMagnetURL(magnetURL);
+        return performMagnetHandshakeWithParams(magnetInfo);
+    }
+
+    public static Pair<TCPService, Long> performMagnetHandshakeWithParams(Map<String, String> magnetInfo) {
         List<String> peerList = TorrentDownloader.getPeerListFromMagnetInfo(magnetInfo);
         for (String peer : peerList) {
             String peerIP = peer.split(":")[0];
             int peerPort = Integer.parseInt(peer.split(":")[1]);
             Pair<TCPService, Long> handshakeResult = TorrentDownloader.performMagnetHandshakeOnPeer(magnetInfo, peerIP, peerPort);
-            return handshakeResult;
+            if (handshakeResult != null && handshakeResult.getLeft() != null) {
+                return handshakeResult;
+            }
         }
         return null;
     }

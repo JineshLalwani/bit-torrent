@@ -173,8 +173,8 @@ public class TorrentService implements ITorrentService{
             }
         }
 
-        // Fall back to peer handshake for metadata
-        Pair<TCPService, Long> handshakeResult = TorrentDownloader.performMagnetHandshake(magnetURL);
+        // Fall back to peer handshake for metadata (use parsed params with fallback trackers)
+        Pair<TCPService, Long> handshakeResult = TorrentDownloader.performMagnetHandshakeWithParams(params);
 
         if (handshakeResult != null && handshakeResult.getLeft() != null) {
             TCPService tcpService = handshakeResult.getLeft();
