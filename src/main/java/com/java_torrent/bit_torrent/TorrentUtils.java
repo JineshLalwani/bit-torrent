@@ -5,6 +5,18 @@ import java.nio.charset.StandardCharsets;
 import java.util.*;
 
 public class TorrentUtils {
+
+    // Public HTTP trackers used as fallback when a magnet link has no trackers
+    private static final List<String> FALLBACK_TRACKERS = List.of(
+            "http://bt1.archive.org:6969/announce",
+            "http://bt2.archive.org:6969/announce",
+            "https://torrent.ubuntu.com/announce",
+            "http://tracker.opentrackr.org:1337/announce",
+            "udp://tracker.opentrackr.org:1337/announce",
+            "udp://open.demonii.com:1337/announce",
+            "udp://open.stealth.si:80/announce",
+            "udp://tracker.torrent.eu.org:451/announce"
+    );
     public static List<String> splitPieceHashes(byte[] pieces, int pieceLength, List<String> pieceHashes) {
         for (int i = 0; i < pieces.length; i += pieceLength) {
             String pieceHashString = Utils.byteToHexString(Arrays.copyOfRange(pieces, i, i + pieceLength));
@@ -54,6 +66,16 @@ public class TorrentUtils {
         trackers.stream()
                 .filter(t -> t.startsWith("udp://"))
                 .forEach(supported::add);
+
+        // If no trackers provided, add fallback public trackers
+        if (supported.isEmpty()) {
+            FALLBACK_TRACKERS.stream()
+                    .filter(t -> t.startsWith("http://") || t.startsWith("https://"))
+                    .forEach(supported::add);
+            FALLBACK_TRACKERS.stream()
+                    .filter(t -> t.startsWith("udp://"))
+                    .forEach(supported::add);
+        }
 
         if (!supported.isEmpty()) {
             map.put("tr", supported.get(0));
