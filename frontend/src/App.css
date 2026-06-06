@@ -371,3 +371,162 @@ header h1 {
 .card-header h2 {
   margin-bottom: 0;
 }
+
+.file-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.file-card {
+  border: 1px solid #e8e8e8;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: box-shadow 0.3s ease;
+}
+
+.file-card:hover {
+  box-shadow: 0 2px 12px rgba(102, 126, 234, 0.15);
+}
+
+.file-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1rem 1.25rem;
+  cursor: pointer;
+  background: #fafbff;
+  transition: background 0.2s ease;
+}
+
+.file-card-header:hover {
+  background: #f0f2ff;
+}
+
+.file-card-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.file-card-name {
+  font-weight: 600;
+  color: #333;
+  font-size: 1rem;
+}
+
+.file-card-size {
+  color: #888;
+  font-size: 0.85rem;
+}
+
+.file-card-actions {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.expand-icon {
+  color: #667eea;
+  font-size: 0.75rem;
+}
+
+.file-card-details {
+  padding: 1.25rem;
+  border-top: 1px solid #eee;
+  animation: slideIn 0.2s ease;
+}
+
+.detail-section {
+  margin-bottom: 1.25rem;
+}
+
+.detail-section:last-child {
+  margin-bottom: 0;
+}
+
+.detail-section h4 {
+  color: #667eea;
+  font-size: 0.95rem;
+  margin-bottom: 0.75rem;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid #eee;
+}
+
+.detail-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.detail-row {
+  display: flex;
+  gap: 1rem;
+  font-size: 0.9rem;
+}
+
+.detail-label {
+  color: #888;
+  min-width: 110px;
+  font-weight: 500;
+}
+
+.detail-value {
+  color: #333;
+  word-break: break-all;
+}
+
+.detail-mono {
+  font-family: 'Courier New', monospace;
+  font-size: 0.85rem;
+  color: #764ba2;
+}
+
+.peers-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.peer-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.75rem;
+  background: #f8f9fa;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.peer-badge {
+  padding: 0.15rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.peer-badge.seeder {
+  background: #dcfce7;
+  color: #16a34a;
+}
+
+.peer-address {
+  color: #333;
+  flex: 1;
+}
+
+.peer-status {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.peer-status.connected {
+  color: #16a34a;
+}
+
+.peers-summary {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #888;
+}

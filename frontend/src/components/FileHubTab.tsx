@@ -8,11 +8,6 @@ const formatFileSize = (bytes: number): string => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 };
 
-const truncateHash = (hash: string): string => {
-    if (hash.length <= 16) return hash;
-    return hash.substring(0, 8) + '...' + hash.substring(hash.length - 8);
-};
-
 const FileHubTab: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
     const [uploading, setUploading] = useState(false);
@@ -20,6 +15,7 @@ const FileHubTab: React.FC = () => {
     const [files, setFiles] = useState<SharedFileInfo[]>([]);
     const [loadingFiles, setLoadingFiles] = useState(false);
     const [downloading, setDownloading] = useState<string | null>(null);
+    const [expandedFile, setExpandedFile] = useState<string | null>(null);
 
     const loadFiles = async () => {
         setLoadingFiles(true);
@@ -76,6 +72,10 @@ const FileHubTab: React.FC = () => {
         } finally {
             setDownloading(null);
         }
+    };
+
+    const toggleExpand = (fileId: string) => {
+        setExpandedFile(expandedFile === fileId ? null : fileId);
     };
 
     return (
@@ -136,40 +136,74 @@ const FileHubTab: React.FC = () => {
                         <p>No files shared yet. Be the first to upload!</p>
                     </div>
                 ) : (
-                    <table className="file-table">
-                        <thead>
-                            <tr>
-                                <th>File</th>
-                                <th>Size</th>
-                                <th>Info Hash</th>
-                                <th>Uploaded</th>
-                                <th></th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {files.map((f) => (
-                                <tr key={f.id}>
-                                    <td><strong>{f.fileName}</strong></td>
-                                    <td>{formatFileSize(f.fileSize)}</td>
-                                    <td>
-                                        <span className="info-hash" title={f.infoHash}>
-                                            {truncateHash(f.infoHash)}
-                                        </span>
-                                    </td>
-                                    <td>{new Date(f.uploadedAt).toLocaleDateString()}</td>
-                                    <td>
+                    <div className="file-list">
+                        {files.map((f) => (
+                            <div key={f.id} className="file-card">
+                                <div className="file-card-header" onClick={() => toggleExpand(f.id)}>
+                                    <div className="file-card-info">
+                                        <span className="file-card-name">{f.fileName}</span>
+                                        <span className="file-card-size">{formatFileSize(f.fileSize)}</span>
+                                    </div>
+                                    <div className="file-card-actions">
                                         <button
-                                            onClick={() => handleDownload(f.id, f.fileName)}
+                                            onClick={(e) => { e.stopPropagation(); handleDownload(f.id, f.fileName); }}
                                             className="btn-download"
                                             disabled={downloading === f.id}
                                         >
                                             {downloading === f.id ? 'Downloading...' : 'Download'}
                                         </button>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
+                                        <span className="expand-icon">{expandedFile === f.id ? '\u25B2' : '\u25BC'}</span>
+                                    </div>
+                                </div>
+
+                                {expandedFile === f.id && (
+                                    <div className="file-card-details">
+                                        <div className="detail-section">
+                                            <h4>Torrent Info</h4>
+                                            <div className="detail-grid">
+                                                <div className="detail-row">
+                                                    <span className="detail-label">File Name</span>
+                                                    <span className="detail-value">{f.fileName}</span>
+                                                </div>
+                                                <div className="detail-row">
+                                                    <span className="detail-label">File Size</span>
+                                                    <span className="detail-value">{formatFileSize(f.fileSize)} ({f.fileSize.toLocaleString()} bytes)</span>
+                                                </div>
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Info Hash</span>
+                                                    <span className="detail-value detail-mono">{f.infoHash}</span>
+                                                </div>
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Piece Count</span>
+                                                    <span className="detail-value">{f.pieceCount}</span>
+                                                </div>
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Piece Length</span>
+                                                    <span className="detail-value">{formatFileSize(f.pieceLength)}</span>
+                                                </div>
+                                                <div className="detail-row">
+                                                    <span className="detail-label">Uploaded</span>
+                                                    <span className="detail-value">{new Date(f.uploadedAt).toLocaleString()}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+
+                                        <div className="detail-section">
+                                            <h4>Peers</h4>
+                                            <div className="peers-list">
+                                                <div className="peer-item">
+                                                    <span className="peer-badge seeder">Seeder</span>
+                                                    <span className="peer-address">Server (this node)</span>
+                                                    <span className="peer-status connected">Connected</span>
+                                                </div>
+                                            </div>
+                                            <p className="peers-summary">1 seeder, 0 leechers</p>
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
                 )}
             </div>
         </div>
