@@ -1,8 +1,9 @@
 package com.java_torrent.bit_torrent;
 
+import com.java_torrent.bit_torrent.service.DownloadManager;
 import com.java_torrent.bit_torrent.service.ITorrentService;
+import com.java_torrent.bit_torrent.service.TorrentService;
 import org.apache.commons.lang3.tuple.Pair;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 
@@ -14,8 +15,9 @@ import java.util.Map;
 @SpringBootApplication
 public class BitTorrentApplication {
 
-    @Autowired
-    private static ITorrentService torrentService;
+    // CLI mode runs without a Spring context, so the service is created directly
+    // (a static @Autowired field is never injected and was always null here)
+    private static final ITorrentService torrentService = new TorrentService(new DownloadManager());
 
     public static void main(String[] args) {
         // If no arguments provided, start the web server

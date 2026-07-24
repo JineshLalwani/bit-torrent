@@ -9,4 +9,6 @@ public interface IFileShareService {
     FileUploadResponse uploadFile(MultipartFile file) throws Exception;
     FileListResponse listFiles();
     SharedFileMetadata getFileMetadata(String fileId);
+    SharedFileMetadata getFileByInfoHash(String infoHashHex);
+    byte[] generateTorrentFile(String fileId, String announceUrl);
 }

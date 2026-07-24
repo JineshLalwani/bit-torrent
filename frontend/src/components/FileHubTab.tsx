@@ -8,6 +8,8 @@ const formatFileSize = (bytes: number): string => {
     return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
 };
 
+const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // matches server multipart limit
+
 const FileHubTab: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
     const [uploading, setUploading] = useState(false);
@@ -16,6 +18,7 @@ const FileHubTab: React.FC = () => {
     const [loadingFiles, setLoadingFiles] = useState(false);
     const [downloading, setDownloading] = useState<string | null>(null);
     const [expandedFile, setExpandedFile] = useState<string | null>(null);
+    const [copiedId, setCopiedId] = useState<string | null>(null);
 
     const loadFiles = async () => {
         setLoadingFiles(true);
@@ -47,6 +50,10 @@ const FileHubTab: React.FC = () => {
             alert('Please select a file first');
             return;
         }
+        if (file.size > MAX_UPLOAD_BYTES) {
+            alert('File is too large — the server accepts uploads up to 100 MB');
+            return;
+        }
         setUploading(true);
         setUploadResult(null);
         try {
@@ -74,6 +81,26 @@ const FileHubTab: React.FC = () => {
         }
     };
 
+    const handleTorrentDownload = async (fileId: string, fileName: string) => {
+        try {
+            await fileShareApi.downloadTorrentFile(fileId, fileName);
+        } catch (error) {
+            alert('.torrent download failed: ' + (error as Error).message);
+        }
+    };
+
+    const handleCopyMagnet = async (id: string, magnetLink?: string) => {
+        if (!magnetLink) return;
+        try {
+            await navigator.clipboard.writeText(magnetLink);
+        } catch {
+            // clipboard API unavailable (e.g. non-HTTPS) — fall back to prompt
+            window.prompt('Copy the magnet link:', magnetLink);
+        }
+        setCopiedId(id);
+        setTimeout(() => setCopiedId(prev => (prev === id ? null : prev)), 2000);
+    };
+
     const toggleExpand = (fileId: string) => {
         setExpandedFile(expandedFile === fileId ? null : fileId);
     };
@@ -96,7 +123,7 @@ const FileHubTab: React.FC = () => {
                 </div>
                 <div className="button-group">
                     <button onClick={handleUpload} className="btn btn-primary" disabled={uploading || !file}>
-                        {uploading ? 'Uploading...' : 'Upload & Generate Torrent Info'}
+                        {uploading ? 'Uploading...' : 'Upload & Start Seeding'}
                     </button>
                 </div>
 
@@ -106,6 +133,14 @@ const FileHubTab: React.FC = () => {
                         <p><span className="label">Size: </span>{formatFileSize(uploadResult.fileSize)}</p>
                         <p><span className="label">Info Hash: </span><span className="value">{uploadResult.infoHash}</span></p>
                         <p><span className="label">Pieces: </span>{uploadResult.pieceCount} x {formatFileSize(uploadResult.pieceLength)}</p>
+                        {uploadResult.magnetLink && (
+                            <div className="magnet-row">
+                                <span className="magnet-link">{uploadResult.magnetLink}</span>
+                                <button className="btn-refresh" onClick={() => handleCopyMagnet(uploadResult.id, uploadResult.magnetLink)}>
+                                    {copiedId === uploadResult.id ? 'Copied!' : 'Copy Magnet'}
+                                </button>
+                            </div>
+                        )}
                     </div>
                 )}
 
@@ -146,13 +181,26 @@ const FileHubTab: React.FC = () => {
                                     </div>
                                     <div className="file-card-actions">
                                         <button
+                                            onClick={(e) => { e.stopPropagation(); handleCopyMagnet(f.id, f.magnetLink); }}
+                                            className="btn-refresh"
+                                            disabled={!f.magnetLink}
+                                        >
+                                            {copiedId === f.id ? 'Copied!' : 'Copy Magnet'}
+                                        </button>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); handleTorrentDownload(f.id, f.fileName); }}
+                                            className="btn-refresh"
+                                        >
+                                            .torrent
+                                        </button>
+                                        <button
                                             onClick={(e) => { e.stopPropagation(); handleDownload(f.id, f.fileName); }}
                                             className="btn-download"
                                             disabled={downloading === f.id}
                                         >
                                             {downloading === f.id ? 'Downloading...' : 'Download'}
                                         </button>
-                                        <span className="expand-icon">{expandedFile === f.id ? '\u25B2' : '\u25BC'}</span>
+                                        <span className="expand-icon">{expandedFile === f.id ? '▲' : '▼'}</span>
                                     </div>
                                 </div>
 
@@ -185,6 +233,12 @@ const FileHubTab: React.FC = () => {
                                                     <span className="detail-label">Uploaded</span>
                                                     <span className="detail-value">{new Date(f.uploadedAt).toLocaleString()}</span>
                                                 </div>
+                                                {f.magnetLink && (
+                                                    <div className="detail-row">
+                                                        <span className="detail-label">Magnet</span>
+                                                        <span className="detail-value detail-mono magnet-link">{f.magnetLink}</span>
+                                                    </div>
+                                                )}
                                             </div>
                                         </div>
 
@@ -193,11 +247,13 @@ const FileHubTab: React.FC = () => {
                                             <div className="peers-list">
                                                 <div className="peer-item">
                                                     <span className="peer-badge seeder">Seeder</span>
-                                                    <span className="peer-address">Server (this node)</span>
-                                                    <span className="peer-status connected">Connected</span>
+                                                    <span className="peer-address">This server's built-in seeder</span>
+                                                    <span className="peer-status connected">Listening</span>
                                                 </div>
                                             </div>
-                                            <p className="peers-summary">1 seeder, 0 leechers</p>
+                                            <p className="peers-summary">
+                                                Paste the magnet link into the Magnet tab (or the .torrent into the Torrent tab) to download this file over the BitTorrent protocol.
+                                            </p>
                                         </div>
                                     </div>
                                 )}

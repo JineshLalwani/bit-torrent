@@ -13,6 +13,7 @@ import org.springframework.web.multipart.MultipartFile;
 
 import java.io.File;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -60,7 +61,7 @@ public class FileShareService implements IFileShareService {
     @Override
     public FileUploadResponse uploadFile(MultipartFile file) throws Exception {
         String id = UUID.randomUUID().toString();
-        String fileName = file.getOriginalFilename();
+        String fileName = Utils.sanitizeFileName(file.getOriginalFilename());
         byte[] fileBytes = file.getBytes();
         long fileSize = fileBytes.length;
 
@@ -78,20 +79,7 @@ public class FileShareService implements IFileShareService {
             offset = end;
         }
 
-        // Build bencoded info dict and compute info hash
-        byte[] rawPieceHashes = new byte[pieceHashes.size() * 20];
-        for (int i = 0; i < pieceHashes.size(); i++) {
-            byte[] hashBytes = Utils.hexStringToByteArray(pieceHashes.get(i));
-            System.arraycopy(hashBytes, 0, rawPieceHashes, i * 20, 20);
-        }
-
-        Map<String, Object> infoDict = new TreeMap<>();
-        infoDict.put("length", fileSize);
-        infoDict.put("name", ByteBuffer.wrap(fileName.getBytes()));
-        infoDict.put("piece length", PIECE_LENGTH);
-        infoDict.put("pieces", ByteBuffer.wrap(rawPieceHashes));
-
-        byte[] encodedInfo = new Bencode(true).encode(infoDict);
+        byte[] encodedInfo = new Bencode(true).encode(buildInfoDict(fileName, fileSize, pieceHashes));
         String infoHash = Utils.calculateSHA1(encodedInfo);
 
         String uploadedAt = Instant.now().toString();
@@ -111,6 +99,41 @@ public class FileShareService implements IFileShareService {
         );
     }
 
+    private static Map<String, Object> buildInfoDict(String fileName, long fileSize, List<String> pieceHashes) {
+        byte[] rawPieceHashes = new byte[pieceHashes.size() * 20];
+        for (int i = 0; i < pieceHashes.size(); i++) {
+            byte[] hashBytes = Utils.hexStringToByteArray(pieceHashes.get(i));
+            System.arraycopy(hashBytes, 0, rawPieceHashes, i * 20, 20);
+        }
+
+        Map<String, Object> infoDict = new TreeMap<>();
+        infoDict.put("length", fileSize);
+        infoDict.put("name", ByteBuffer.wrap(fileName.getBytes(StandardCharsets.UTF_8)));
+        infoDict.put("piece length", PIECE_LENGTH);
+        infoDict.put("pieces", ByteBuffer.wrap(rawPieceHashes));
+        return infoDict;
+    }
+
+    /**
+     * Builds a .torrent (metainfo) file for a shared file. The info dict is
+     * rebuilt exactly as at upload time so the info hash stays identical.
+     *
+     * @param announceUrl optional tracker announce URL to embed
+     */
+    @Override
+    public byte[] generateTorrentFile(String fileId, String announceUrl) {
+        SharedFileMetadata metadata = fileStore.get(fileId);
+        if (metadata == null) {
+            return null;
+        }
+        Map<String, Object> torrentDict = new TreeMap<>();
+        if (announceUrl != null && !announceUrl.isBlank()) {
+            torrentDict.put("announce", ByteBuffer.wrap(announceUrl.getBytes(StandardCharsets.UTF_8)));
+        }
+        torrentDict.put("info", buildInfoDict(metadata.getFileName(), metadata.getFileSize(), metadata.getPieceHashes()));
+        return new Bencode(true).encode(torrentDict);
+    }
+
     @Override
     public FileListResponse listFiles() {
         List<FileUploadResponse> files = fileStore.values().stream()
@@ -126,6 +149,17 @@ public class FileShareService implements IFileShareService {
     @Override
     public SharedFileMetadata getFileMetadata(String fileId) {
         return fileStore.get(fileId);
+    }
+
+    /** Looks up a shared file by its hex info hash (used by the seeder). */
+    @Override
+    public SharedFileMetadata getFileByInfoHash(String infoHashHex) {
+        for (SharedFileMetadata metadata : fileStore.values()) {
+            if (metadata.getInfoHash().equalsIgnoreCase(infoHashHex)) {
+                return metadata;
+            }
+        }
+        return null;
     }
 
     private synchronized void persistMetadata() {

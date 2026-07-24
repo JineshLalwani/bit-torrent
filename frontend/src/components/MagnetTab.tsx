@@ -1,38 +1,22 @@
 import React, { useState } from 'react';
-import { torrentApi, MagnetParseResponse, TorrentInfoResponse, DownloadResponse } from '../services/api';
+import { torrentApi, MagnetParseResponse, TorrentInfoResponse } from '../services/api';
+import { useAsyncDownload } from '../hooks/useAsyncDownload';
+import DownloadProgress from './DownloadProgress';
 
 const MagnetTab: React.FC = () => {
     const [magnetUrl, setMagnetUrl] = useState('');
-    const [result, setResult] = useState<MagnetParseResponse | TorrentInfoResponse | DownloadResponse | null>(null);
+    const [result, setResult] = useState<MagnetParseResponse | TorrentInfoResponse | null>(null);
     const [loading, setLoading] = useState(false);
+    const { status: downloadStatus, active: downloading, start: startDownload } = useAsyncDownload();
 
-    const handleParse = async () => {
+    const runAction = async (action: () => Promise<MagnetParseResponse | TorrentInfoResponse>) => {
         if (!magnetUrl.trim()) {
             alert('Please enter a magnet URL');
             return;
         }
-
         setLoading(true);
         try {
-            const response = await torrentApi.parseMagnet(magnetUrl);
-            setResult(response);
-        } catch (error) {
-            setResult({ error: (error as Error).message } as any);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleGetInfo = async () => {
-        if (!magnetUrl.trim()) {
-            alert('Please enter a magnet URL');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const response = await torrentApi.getMagnetInfo(magnetUrl);
-            setResult(response);
+            setResult(await action());
         } catch (error) {
             setResult({ error: (error as Error).message } as any);
         } finally {
@@ -45,20 +29,8 @@ const MagnetTab: React.FC = () => {
             alert('Please enter a magnet URL');
             return;
         }
-
-        if (!window.confirm('Start downloading from this magnet link?')) {
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const response = await torrentApi.downloadMagnet(magnetUrl);
-            setResult(response);
-        } catch (error) {
-            setResult({ error: (error as Error).message } as any);
-        } finally {
-            setLoading(false);
-        }
+        setResult(null);
+        await startDownload(() => torrentApi.startMagnetDownload(magnetUrl));
     };
 
     return (
@@ -78,14 +50,14 @@ const MagnetTab: React.FC = () => {
                 </div>
 
                 <div className="button-group">
-                    <button onClick={handleParse} className="btn btn-info" disabled={loading}>
+                    <button onClick={() => runAction(() => torrentApi.parseMagnet(magnetUrl))} className="btn btn-info" disabled={loading || downloading}>
                         Parse
                     </button>
-                    <button onClick={handleGetInfo} className="btn btn-info" disabled={loading}>
+                    <button onClick={() => runAction(() => torrentApi.getMagnetInfo(magnetUrl))} className="btn btn-info" disabled={loading || downloading}>
                         Get Info
                     </button>
-                    <button onClick={handleDownload} className="btn btn-primary" disabled={loading}>
-                        Download
+                    <button onClick={handleDownload} className="btn btn-primary" disabled={loading || downloading}>
+                        {downloading ? 'Downloading…' : 'Download'}
                     </button>
                 </div>
             </div>
@@ -93,14 +65,16 @@ const MagnetTab: React.FC = () => {
             {loading && (
                 <div className="loading">
                     <div className="spinner"></div>
-                    <p>Processing...</p>
+                    <p>Processing... (magnet metadata can take a little while)</p>
                 </div>
             )}
+
+            {downloadStatus && <DownloadProgress status={downloadStatus} />}
 
             {result && (
                 <div className="card result-card">
                     <h3>Result</h3>
-                    <pre className={result.error ? 'error' : ''}>
+                    <pre className={(result as any).error ? 'error' : ''}>
                         {JSON.stringify(result, null, 2)}
                     </pre>
                 </div>

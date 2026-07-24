@@ -7,9 +7,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import org.springframework.stereotype.Service;
 import org.springframework.web.multipart.MultipartFile;
 
-import java.io.ByteArrayOutputStream;
 import java.io.IOException;
-import java.io.PrintStream;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.file.Files;
@@ -20,21 +18,31 @@ import java.util.List;
 import java.util.Map;
 
 @Service
-public class TorrentService implements ITorrentService{
+public class TorrentService implements ITorrentService {
 
     private static final String DOWNLOAD_DIR = "downloads/";
+
+    private final DownloadManager downloadManager;
+
+    public TorrentService(DownloadManager downloadManager) {
+        this.downloadManager = downloadManager;
+    }
 
     @Override
     public TorrentInfoResponse getTorrentInfo(MultipartFile file) throws Exception {
         byte[] fileBytes = file.getBytes();
         Torrent torrent = TorrentUtils.getTorrentFromBytes(fileBytes);
+        return toInfoResponse(torrent);
+    }
 
+    private static TorrentInfoResponse toInfoResponse(Torrent torrent) {
         return new TorrentInfoResponse(
                 torrent.getTrackerURL(),
+                torrent.getName(),
                 torrent.getLength(),
                 torrent.getInfoHash(),
                 torrent.getPieces().size(),
-                torrent.getPieces().get(0).length() * torrent.getPieces().size(),
+                torrent.getPieceLength(),
                 null
         );
     }
@@ -48,18 +56,31 @@ public class TorrentService implements ITorrentService{
         return new PeerListResponse(peerList, null);
     }
 
-    @Override
-    public DownloadResponse downloadTorrent(MultipartFile file) throws Exception {
-        byte[] fileBytes = file.getBytes();
-        Torrent torrent = TorrentUtils.getTorrentFromBytes(fileBytes);
-
-        // Create downloads directory if it doesn't exist
+    private static Path ensureDownloadDir() throws IOException {
         Path downloadPath = Paths.get(DOWNLOAD_DIR);
         if (!Files.exists(downloadPath)) {
             Files.createDirectories(downloadPath);
         }
+        return downloadPath;
+    }
 
-        String fileName = file.getOriginalFilename().replace(".torrent", "");
+    private static String deriveFileName(Torrent torrent, String fallback) {
+        String name = torrent.getName();
+        if (name == null || name.isBlank()) {
+            name = fallback;
+        }
+        return Utils.sanitizeFileName(name);
+    }
+
+    @Override
+    public DownloadResponse downloadTorrent(MultipartFile file) throws Exception {
+        byte[] fileBytes = file.getBytes();
+        Torrent torrent = TorrentUtils.getTorrentFromBytes(fileBytes);
+        ensureDownloadDir();
+
+        String uploadedName = file.getOriginalFilename();
+        String fileName = deriveFileName(torrent,
+                uploadedName != null ? uploadedName.replace(".torrent", "") : "download");
         String outputPath = DOWNLOAD_DIR + fileName;
 
         TorrentDownloader.downloadTorrent(torrent, outputPath, false);
@@ -73,11 +94,92 @@ public class TorrentService implements ITorrentService{
     }
 
     @Override
+    public DownloadStatusResponse startTorrentDownload(MultipartFile file) throws Exception {
+        byte[] fileBytes = file.getBytes();
+        Torrent torrent = TorrentUtils.getTorrentFromBytes(fileBytes);
+        ensureDownloadDir();
+
+        String uploadedName = file.getOriginalFilename();
+        String fileName = deriveFileName(torrent,
+                uploadedName != null ? uploadedName.replace(".torrent", "") : "download");
+        String outputPath = DOWNLOAD_DIR + fileName;
+
+        DownloadManager.DownloadJob job = downloadManager.submit(fileName, j -> {
+            j.setStatus(DownloadManager.Status.DOWNLOADING);
+            j.setTotalPieces(torrent.getPieces().size());
+            TorrentDownloader.downloadTorrent(torrent, outputPath, false,
+                    (done, total) -> j.setCompletedPieces(done), null);
+            j.setFilePath(outputPath);
+        });
+        return toStatusResponse(job);
+    }
+
+    @Override
+    public DownloadStatusResponse startMagnetDownload(String magnetUrl) {
+        // Validate the URL up front so obvious errors fail synchronously
+        Map<String, String> params = TorrentUtils.getParamsFromMagnetURL(magnetUrl);
+        TorrentUtils.getInfoHashFromMagnetParams(params);
+        String displayName = params.getOrDefault("dn", "magnet-download");
+
+        DownloadManager.DownloadJob job = downloadManager.submit(Utils.sanitizeFileName(displayName), j -> {
+            try {
+                ensureDownloadDir();
+                j.setStatus(DownloadManager.Status.FETCHING_METADATA);
+                Pair<Torrent, TCPService> result = resolveMagnet(params);
+                Torrent torrent = result.getLeft();
+                closeQuietly(result.getRight());
+
+                String fileName = deriveFileName(torrent, j.getFileName());
+                String outputPath = DOWNLOAD_DIR + fileName;
+                j.setFileName(fileName);
+                j.setTotalPieces(torrent.getPieces().size());
+                j.setStatus(DownloadManager.Status.DOWNLOADING);
+
+                TorrentDownloader.downloadTorrent(torrent, outputPath, true,
+                        (done, total) -> j.setCompletedPieces(done),
+                        TorrentUtils.getDirectPeers(params));
+                j.setFilePath(outputPath);
+            } catch (IOException e) {
+                throw new RuntimeException(e.getMessage(), e);
+            }
+        });
+        return toStatusResponse(job);
+    }
+
+    @Override
+    public DownloadStatusResponse getDownloadStatus(String downloadId) {
+        DownloadManager.DownloadJob job = downloadManager.getJob(downloadId);
+        if (job == null) {
+            return null;
+        }
+        return toStatusResponse(job);
+    }
+
+    private static DownloadStatusResponse toStatusResponse(DownloadManager.DownloadJob job) {
+        double progress = job.getTotalPieces() > 0
+                ? (100.0 * job.getCompletedPieces()) / job.getTotalPieces()
+                : 0.0;
+        if (job.getStatus() == DownloadManager.Status.COMPLETED) {
+            progress = 100.0;
+        }
+        return new DownloadStatusResponse(
+                job.getId(),
+                job.getFileName(),
+                job.getFilePath(),
+                job.getStatus().name(),
+                job.getTotalPieces(),
+                job.getCompletedPieces(),
+                Math.round(progress * 10.0) / 10.0,
+                job.getError()
+        );
+    }
+
+    @Override
     public MagnetParseResponse parseMagnetUrl(String magnetUrl) {
         try {
             Map<String, String> magnetInfo = TorrentUtils.getParamsFromMagnetURL(magnetUrl);
             String trackerUrl = magnetInfo.get("tr");
-            String infoHash = magnetInfo.get("xt").split(":")[2];
+            String infoHash = TorrentUtils.getInfoHashFromMagnetParams(magnetInfo);
 
             return new MagnetParseResponse(trackerUrl, infoHash, null);
         } catch (Exception e) {
@@ -88,43 +190,24 @@ public class TorrentService implements ITorrentService{
     @Override
     public TorrentInfoResponse getMagnetInfo(String magnetUrl) throws Exception {
         Pair<Torrent, TCPService> result = getTorrentFromMagnetURL(magnetUrl);
-        Torrent torrent = result.getLeft();
-        TCPService tcpService = result.getRight();
-
-        if (tcpService != null) {
-            try { tcpService.close(); } catch (IOException ignored) {}
-        }
-
-        return new TorrentInfoResponse(
-                torrent.getTrackerURL(),
-                torrent.getLength(),
-                torrent.getInfoHash(),
-                torrent.getPieces().size(),
-                torrent.getPieces().get(0).length() * torrent.getPieces().size(),
-                null
-        );
+        closeQuietly(result.getRight());
+        return toInfoResponse(result.getLeft());
     }
 
     @Override
     public DownloadResponse downloadMagnet(String magnetUrl) throws Exception {
-        Pair<Torrent, TCPService> pair = getTorrentFromMagnetURL(magnetUrl);
+        Map<String, String> params = TorrentUtils.getParamsFromMagnetURL(magnetUrl);
+        Pair<Torrent, TCPService> pair = resolveMagnet(params);
         Torrent torrent = pair.getLeft();
-        TCPService tcpService = pair.getRight();
+        closeQuietly(pair.getRight());
 
-        if (tcpService != null) {
-            try { tcpService.close(); } catch (IOException ignored) {}
-        }
-
-        // Create downloads directory if it doesn't exist
-        Path downloadPath = Paths.get(DOWNLOAD_DIR);
-        if (!Files.exists(downloadPath)) {
-            Files.createDirectories(downloadPath);
-        }
-
-        String fileName = "magnet_" + System.currentTimeMillis();
+        ensureDownloadDir();
+        String fileName = deriveFileName(torrent,
+                params.getOrDefault("dn", "magnet_" + System.currentTimeMillis()));
         String outputPath = DOWNLOAD_DIR + fileName;
 
-        TorrentDownloader.downloadTorrent(torrent, outputPath, true);
+        TorrentDownloader.downloadTorrent(torrent, outputPath, true, null,
+                TorrentUtils.getDirectPeers(params));
 
         return new DownloadResponse(
                 "Download completed for magnet link",
@@ -134,21 +217,16 @@ public class TorrentService implements ITorrentService{
         );
     }
 
+    private static void closeQuietly(TCPService tcpService) {
+        if (tcpService != null) {
+            try { tcpService.close(); } catch (IOException ignored) {}
+        }
+    }
+
     @Override
     public DecodeResponse decodeBencode(String bencodedValue) {
         try {
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
-            PrintStream ps = new PrintStream(baos);
-            PrintStream old = System.out;
-            System.setOut(ps);
-
-            Codec.decodeAndPrintBencodedString(bencodedValue);
-
-            System.out.flush();
-            System.setOut(old);
-
-            String output = baos.toString();
-            return new DecodeResponse(output, null);
+            return new DecodeResponse(Codec.decodeToJson(bencodedValue), null);
         } catch (Exception e) {
             return new DecodeResponse(null, e.getMessage());
         }
@@ -156,8 +234,15 @@ public class TorrentService implements ITorrentService{
 
     @Override
     public Pair<Torrent, TCPService> getTorrentFromMagnetURL(String magnetURL) {
-        Map<String, String> params = TorrentUtils.getParamsFromMagnetURL(magnetURL);
-        String infoHash = params.get("xt").split(":")[2];
+        return resolveMagnet(TorrentUtils.getParamsFromMagnetURL(magnetURL));
+    }
+
+    /**
+     * Resolves torrent metadata for a magnet link: first via the xs (exact
+     * source) URL if present, otherwise via the peer metadata extension.
+     */
+    private Pair<Torrent, TCPService> resolveMagnet(Map<String, String> params) {
+        String infoHash = TorrentUtils.getInfoHashFromMagnetParams(params);
         String trackerURL = params.get("tr");
 
         // Try xs (exact source) URL first — fast HTTPS download of .torrent file
@@ -167,13 +252,16 @@ public class TorrentService implements ITorrentService{
                 HttpClientService httpClientService = new HttpClientService();
                 HttpResponse<byte[]> response = httpClientService.sendGetRequest(xs);
                 Torrent torrent = Torrent.fromBytes(response.body());
+                if (!torrent.getInfoHash().equalsIgnoreCase(infoHash)) {
+                    throw new RuntimeException("xs torrent info hash does not match magnet link");
+                }
                 return Pair.of(torrent, null);
             } catch (Exception e) {
                 System.out.println("xs fallback failed: " + e.getMessage());
             }
         }
 
-        // Fall back to peer handshake for metadata (use parsed params with fallback trackers)
+        // Fall back to fetching metadata from a peer via the extension protocol
         Pair<TCPService, Long> handshakeResult = TorrentDownloader.performMagnetHandshakeWithParams(params);
 
         if (handshakeResult != null && handshakeResult.getLeft() != null) {
@@ -182,11 +270,12 @@ public class TorrentService implements ITorrentService{
 
             byte[] metadataRequestMessage = TorrentDownloader.createMetadataRequestMessage(0, 0, extensionId);
             tcpService.sendMessage(metadataRequestMessage);
-            byte[] metadataResponse = tcpService.waitForMessage();
+            byte[] metadataResponse = TorrentDownloader.waitForExtendedMessage(tcpService);
             Map<String, Object> metadataPieceDict = TorrentDownloader.getMetadataFromMessage(metadataResponse);
             String calculatedInfoHash = Utils.calculateSHA1(new Bencode(true).encode(metadataPieceDict));
 
-            if (!calculatedInfoHash.equals(infoHash)) {
+            if (!calculatedInfoHash.equalsIgnoreCase(infoHash)) {
+                closeQuietly(tcpService);
                 throw new RuntimeException("Info hash mismatch, expected " + infoHash + " but got " + calculatedInfoHash);
             }
 
@@ -199,6 +288,7 @@ public class TorrentService implements ITorrentService{
                     .setInfoHash(infoHash)
                     .setPieceLength(((Number) metadataPieceDict.get("piece length")).longValue())
                     .setPieces(pieceHashes)
+                    .setName(Torrent.bufToString(metadataPieceDict.get("name")))
                     .build(), tcpService);
         }
 

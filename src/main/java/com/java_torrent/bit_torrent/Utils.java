@@ -60,6 +60,31 @@ public class Utils {
         return byteArray;
     }
 
+    /**
+     * Strips directory components and unsafe characters from a client-supplied
+     * file name so it can never escape the intended storage directory.
+     */
+    public static String sanitizeFileName(String name) {
+        if (name == null || name.isBlank()) {
+            return "unnamed";
+        }
+        String cleaned = name.replace('\\', '/');
+        int idx = cleaned.lastIndexOf('/');
+        if (idx >= 0) {
+            cleaned = cleaned.substring(idx + 1);
+        }
+        cleaned = cleaned.replaceAll("[^a-zA-Z0-9._\\- ()\\[\\]]", "_").trim();
+        if (cleaned.isEmpty() || cleaned.matches("\\.+")) {
+            return "unnamed";
+        }
+        return cleaned;
+    }
+
+    /** Keeps HTTP header values free of quote/CRLF injection. */
+    public static String headerSafe(String value) {
+        return value == null ? "" : value.replaceAll("[\"\\r\\n]", "_");
+    }
+
     public static String calculateSHA1(byte[] bytes) {
         try {
             MessageDigest digest = MessageDigest.getInstance("SHA-1");

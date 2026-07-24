@@ -6,58 +6,110 @@ import org.apache.commons.lang3.tuple.Pair;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
+import java.net.InetSocketAddress;
 import java.net.Socket;
-import java.net.URISyntaxException;
 import java.net.http.HttpResponse;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Paths;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class TorrentDownloader {
 
     private static final int PORT = 6881;
 
+    private static final byte CHOKE_MESSAGE_ID = 0;
     private static final byte UNCHOKE_MESSAGE_ID = 1;
     private static final byte INTERESTED_MESSAGE_ID = 2;
     private static final byte BITFIELD_MESSAGE_ID = 5;
     private static final byte REQUEST_MESSAGE_ID = 6;
     private static final byte PIECE_MESSAGE_ID = 7;
-    private static final int BLOCK_SIZE = 16384;
+    private static final byte EXTENSION_MESSAGE_ID = 20;
 
-    private static Queue<Integer> pieceQueue = new ConcurrentLinkedQueue<>();
-    private static Map<Integer, byte[]> bufferMap = new ConcurrentHashMap<>();
-    private static Lock bufferLock = new ReentrantLock();
+    private static final int BLOCK_SIZE = 16384;
+    private static final int PIPELINE_DEPTH = 8;
+    private static final int CONNECT_TIMEOUT_MS = 8000;
+    private static final int READ_TIMEOUT_MS = 15000;
+    private static final int MAX_PEER_WORKERS = 12;
+    private static final int MAX_PIECE_ATTEMPTS = 4;
+    private static final int MAX_CONSECUTIVE_FAILURES = 3;
+    private static final int MAX_SKIPPED_MESSAGES = 1024;
+
+    /** Callback for piece-level download progress. */
+    public interface ProgressListener {
+        void onProgress(int completedPieces, int totalPieces);
+    }
+
+    /** Opens a socket to a peer with connect/read timeouts applied. */
+    private static TCPService connectToPeer(String peer) throws IOException {
+        String[] hostPort = peer.split(":");
+        Socket socket = new Socket();
+        socket.connect(new InetSocketAddress(hostPort[0], Integer.parseInt(hostPort[1])), CONNECT_TIMEOUT_MS);
+        socket.setSoTimeout(READ_TIMEOUT_MS);
+        return new TCPService(socket);
+    }
+
+    /**
+     * Performs the base handshake, expresses interest and waits until the peer
+     * unchokes us. Bitfield/have/keep-alive messages received in between are
+     * tolerated (peers send them in varying order).
+     */
+    private static TCPService openPeerConnection(Torrent torrent, String peer) throws IOException {
+        TCPService tcpService = connectToPeer(peer);
+        boolean ready = false;
+        try {
+            performHandshake(torrent.getInfoHash(), tcpService, false);
+            tcpService.sendMessage(new byte[]{0, 0, 0, 1, INTERESTED_MESSAGE_ID});
+            awaitUnchoke(tcpService);
+            ready = true;
+            return tcpService;
+        } finally {
+            if (!ready) {
+                try { tcpService.close(); } catch (IOException ignored) {}
+            }
+        }
+    }
+
+    private static void awaitUnchoke(TCPService tcpService) {
+        for (int i = 0; i < MAX_SKIPPED_MESSAGES; i++) {
+            byte[] message = tcpService.waitForMessage();
+            if (message[0] == UNCHOKE_MESSAGE_ID) {
+                return;
+            }
+            // choke/bitfield/have/extension — keep waiting for unchoke
+        }
+        throw new RuntimeException("Peer never unchoked us");
+    }
 
     public static byte[] downloadPieceFromPeer(Torrent torrent, String peer, int index, boolean isMagnetHandshake) {
-        try (Socket socket = new Socket(peer.split(":")[0], Integer.parseInt(peer.split(":")[1]))) {
-            TCPService tcpService = new TCPService(socket);
+        try (TCPService tcpService = connectToPeer(peer)) {
             int pieceLength = (int) torrent.getPieceLength(index);
             if (isMagnetHandshake) {
                 performMagnetHandshakeOnPeer(tcpService, torrent.getInfoHash());
-                return downloadPieceHelper(tcpService, pieceLength, index);
             } else {
                 performHandshake(torrent.getInfoHash(), tcpService, false);
-                return downloadPieceHelper(pieceLength, tcpService, index);
             }
+            return downloadPieceHelper(tcpService, pieceLength, index);
         } catch (Exception e) {
             throw new RuntimeException("Error downloading piece from peer: " + e.getMessage());
         }
     }
+
     public static byte[] downloadPiece(Torrent torrent, int index, boolean isMagnetHandshake) {
-        List<String> peerList = null;
+        List<String> peerList;
         try {
             peerList = getPeerList(torrent);
         } catch (Exception e) {
             throw new RuntimeException("Error getting peer list: " + e.getMessage());
         }
 
-        if (peerList == null || peerList.size() == 0) {
+        if (peerList == null || peerList.isEmpty()) {
             throw new RuntimeException("No peers available to download from");
         }
-        byte piece[] = null;
+        byte[] piece = null;
         for (String peer : peerList) {
             try {
                 System.out.println("Downloading piece from peer: " + peer);
@@ -84,38 +136,59 @@ public class TorrentDownloader {
         return expectedPieceHash.equals(actualPieceHash);
     }
 
-    public static byte[] downloadPieceHelper(int pieceLength, TCPService tcpService, int index) throws Exception {
-        byte[] bitfieldMessage = tcpService.waitForMessage();
-        if (bitfieldMessage[0] != BITFIELD_MESSAGE_ID) {
-            throw new RuntimeException("Expected bitfield message (5) from peer, but received different message: " + bitfieldMessage[0]);
-        }
-        System.out.println("Received bitfield message");
-        byte[] piece = downloadPieceHelper(tcpService, pieceLength, index);
-        return piece;
-    }
+    /**
+     * Downloads one piece on an already-handshaken connection: sends interested,
+     * waits for unchoke, then requests blocks with pipelining.
+     */
     public static byte[] downloadPieceHelper(TCPService tcpService, int pieceLength, int index) throws Exception {
-        // send an interested message to the peer
-        byte[] interestedMessage = new byte[]{0, 0, 0, 1, INTERESTED_MESSAGE_ID};
-        tcpService.sendMessage(interestedMessage);
-        byte[] unchokeMessage = tcpService.waitForMessage();
-        if (unchokeMessage[0] != UNCHOKE_MESSAGE_ID) {
-            throw new RuntimeException("Expected unchoke message (1) from peer, but received different message: " + unchokeMessage[0]);
-        }
-        System.out.println("Received unchoke message");
+        tcpService.sendMessage(new byte[]{0, 0, 0, 1, INTERESTED_MESSAGE_ID});
+        awaitUnchoke(tcpService);
+        return downloadPieceOverConnection(tcpService, pieceLength, index);
+    }
+
+    /**
+     * Requests all blocks of a piece over an unchoked connection, keeping up to
+     * {@link #PIPELINE_DEPTH} requests in flight. Blocks may arrive out of order
+     * and are placed by their begin offset.
+     */
+    private static byte[] downloadPieceOverConnection(TCPService tcpService, int pieceLength, int index) throws IOException {
         int blocks = (int) Math.ceil((double) pieceLength / BLOCK_SIZE);
-        int offset = 0;
         byte[] piece = new byte[pieceLength];
-        for (int blockIndex = 0; blockIndex < blocks; blockIndex++) {
-            int blockLength = Math.min(BLOCK_SIZE, pieceLength - offset);
-            byte[] requestPayload = TCPService.createRequestPayload(index, offset, blockLength);
-            tcpService.sendMessage(REQUEST_MESSAGE_ID, requestPayload);
-            byte[] pieceMessage = tcpService.waitForMessage();
-            if (pieceMessage[0] != PIECE_MESSAGE_ID) {
-                throw new RuntimeException("Expected piece message (7) from peer, but received different message: " + pieceMessage[0]);
+        int nextBlock = 0;
+        int blocksReceived = 0;
+        int outstanding = 0;
+        int skipped = 0;
+        while (blocksReceived < blocks) {
+            while (nextBlock < blocks && outstanding < PIPELINE_DEPTH) {
+                int offset = nextBlock * BLOCK_SIZE;
+                int blockLength = Math.min(BLOCK_SIZE, pieceLength - offset);
+                tcpService.sendMessage(REQUEST_MESSAGE_ID, TCPService.createRequestPayload(index, offset, blockLength));
+                nextBlock++;
+                outstanding++;
             }
-            System.out.println("Received piece message for block: " + blockIndex + " out of " + blocks);
-            System.arraycopy(pieceMessage, 9, piece, offset, blockLength);
-            offset += blockLength;
+            byte[] message = tcpService.waitForMessage();
+            if (message[0] == PIECE_MESSAGE_ID) {
+                if (message.length < 9) {
+                    throw new IOException("Malformed piece message");
+                }
+                ByteBuffer header = ByteBuffer.wrap(message, 1, 8);
+                int pieceIndex = header.getInt();
+                int begin = header.getInt();
+                int blockLength = message.length - 9;
+                if (pieceIndex != index || begin < 0 || begin + blockLength > pieceLength) {
+                    throw new IOException("Unexpected block: piece " + pieceIndex + " offset " + begin);
+                }
+                System.arraycopy(message, 9, piece, begin, blockLength);
+                blocksReceived++;
+                outstanding--;
+            } else if (message[0] == CHOKE_MESSAGE_ID) {
+                throw new IOException("Peer choked us mid-piece");
+            } else {
+                // have/bitfield/extension etc. — ignore, but bound the tolerance
+                if (++skipped > MAX_SKIPPED_MESSAGES) {
+                    throw new IOException("Peer flooded us with non-piece messages");
+                }
+            }
         }
         return piece;
     }
@@ -123,14 +196,35 @@ public class TorrentDownloader {
     private static List<String> getPeerListFromHTTPResponse(HttpResponse<byte[]> response) {
         Bencode bencode = new Bencode(true);
         Map<String, Object> decodedResponse = bencode.decode(response.body(), Type.DICTIONARY);
-        byte[] peersBytes = ((ByteBuffer) decodedResponse.get("peers")).array();
 
+        Object failure = decodedResponse.get("failure reason");
+        if (failure != null) {
+            throw new RuntimeException("Tracker error: " + Torrent.bufToString(failure));
+        }
+
+        Object peersObj = decodedResponse.get("peers");
         List<String> peerList = new ArrayList<>();
-        for (int i = 0; i < peersBytes.length; i += 6) {
-            String ip = String.format("%d.%d.%d.%d", peersBytes[i] & 0xff, peersBytes[i + 1] & 0xff,
-                    peersBytes[i + 2] & 0xff, peersBytes[i + 3] & 0xff);
-            int port = ((peersBytes[i + 4] & 0xff) << 8) | (peersBytes[i + 5] & 0xff);
-            peerList.add(ip + ":" + port);
+        if (peersObj instanceof ByteBuffer) {
+            // Compact model: 6 bytes per peer (4 IP + 2 port)
+            byte[] peersBytes = ((ByteBuffer) peersObj).array();
+            for (int i = 0; i + 6 <= peersBytes.length; i += 6) {
+                String ip = String.format("%d.%d.%d.%d", peersBytes[i] & 0xff, peersBytes[i + 1] & 0xff,
+                        peersBytes[i + 2] & 0xff, peersBytes[i + 3] & 0xff);
+                int port = ((peersBytes[i + 4] & 0xff) << 8) | (peersBytes[i + 5] & 0xff);
+                peerList.add(ip + ":" + port);
+            }
+        } else if (peersObj instanceof List) {
+            // Dictionary model: list of {ip, port}
+            for (Object entry : (List<?>) peersObj) {
+                if (entry instanceof Map) {
+                    Map<?, ?> peerDict = (Map<?, ?>) entry;
+                    String ip = Torrent.bufToString(peerDict.get("ip"));
+                    Object port = peerDict.get("port");
+                    if (ip != null && port instanceof Number) {
+                        peerList.add(ip + ":" + ((Number) port).intValue());
+                    }
+                }
+            }
         }
         return peerList;
     }
@@ -146,8 +240,9 @@ public class TorrentDownloader {
             throw new RuntimeException("Invalid protocol: " + protocol);
         }
         if (isMagnetHandshake) {
-            if (response[25] != 16) {
-                throw new RuntimeException("Invalid reserved byte: " + response[25]);
+            // Extension protocol support is bit 0x10 of reserved byte 5; peers may set other bits too
+            if ((response[25] & 0x10) == 0) {
+                throw new RuntimeException("Peer does not support the extension protocol");
             }
         }
         byte[] receivedInfoHash = Arrays.copyOfRange(response, 28, 48);
@@ -155,7 +250,6 @@ public class TorrentDownloader {
             throw new RuntimeException("Info hash mismatch");
         }
     }
-
 
     static void performHandshake(String infoHash, TCPService tcpService, boolean isMagnetHandshake) {
         byte[] handshakeMessage = createHandshakeMessage(infoHash, isMagnetHandshake);
@@ -168,81 +262,146 @@ public class TorrentDownloader {
     }
 
     static byte[] createHandshakeMessage(String infoHash, boolean isMagnetHandshake) {
-        // create a handshake message to send to the peer
         ByteArrayOutputStream handshakeMessage = new ByteArrayOutputStream();
         try {
             handshakeMessage.write(19);
-            handshakeMessage.write("BitTorrent protocol".getBytes());
-            byte[] reservedBytes = new byte[] {0,0,0,0,0,0,0,0};
+            handshakeMessage.write("BitTorrent protocol".getBytes(StandardCharsets.ISO_8859_1));
+            byte[] reservedBytes = new byte[]{0, 0, 0, 0, 0, 0, 0, 0};
             if (isMagnetHandshake) {
                 reservedBytes[5] = 16;
             }
             handshakeMessage.write(reservedBytes);
             handshakeMessage.write(Utils.hexStringToByteArray(infoHash));
-            handshakeMessage.write("ABCDEFGHIJKLMNOPQRST".getBytes());
-            byte[] handshakeMessageBytes = handshakeMessage.toByteArray();
-            return handshakeMessageBytes;
+            handshakeMessage.write(generatePeerId());
+            return handshakeMessage.toByteArray();
         } catch (Exception e) {
             throw new RuntimeException("Error creating handshake message: " + e.getMessage());
         }
     }
 
     public static void downloadTorrent(Torrent torrent, String storageFilePath, boolean isMagnetDownload) {
+        downloadTorrent(torrent, storageFilePath, isMagnetDownload, null, null);
+    }
+
+    /**
+     * Downloads all pieces of a torrent concurrently and writes the assembled
+     * file to {@code storageFilePath}.
+     *
+     * @param listener   optional progress callback
+     * @param extraPeers optional known peer addresses tried in addition to tracker peers
+     */
+    public static void downloadTorrent(Torrent torrent, String storageFilePath, boolean isMagnetDownload,
+                                       ProgressListener listener, List<String> extraPeers) {
         int numPieces = torrent.getPieces().size();
 
-        // create a queue of pieces to download
-        // add all the pieces to the queue
+        Queue<Integer> pieceQueue = new ConcurrentLinkedQueue<>();
         for (int i = 0; i < numPieces; i++) {
             pieceQueue.add(i);
         }
-        // create a connection pool to each peer
-        List<String> peerList;
+        Map<Integer, byte[]> bufferMap = new ConcurrentHashMap<>();
+        Map<Integer, AtomicInteger> attempts = new ConcurrentHashMap<>();
+        AtomicInteger completed = new AtomicInteger();
+
+        // Direct peers first (e.g. from x.pe magnet params), then tracker peers
+        LinkedHashSet<String> peers = new LinkedHashSet<>();
+        if (extraPeers != null) {
+            peers.addAll(extraPeers);
+        }
         try {
-            peerList = getPeerList(torrent);
-            int numPeers = peerList.size();
-            ExecutorService executorService = Executors.newFixedThreadPool(numPeers);
-            for (String peer : peerList) {
-                executorService.submit(() -> worker(torrent, peer, isMagnetDownload));
+            peers.addAll(getPeerList(torrent));
+        } catch (Exception e) {
+            if (peers.isEmpty()) {
+                throw new RuntimeException("Error getting peer list: " + e.getMessage(), e);
             }
-            executorService.shutdown();
-            try {
-                executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
-            } catch (InterruptedException e) {
-                System.out.println("Error waiting for executor service to terminate: " + e.getMessage());
+            System.out.println("Tracker lookup failed, continuing with direct peers: " + e.getMessage());
+        }
+        if (peers.isEmpty()) {
+            throw new RuntimeException("No peers available to download from");
+        }
+
+        ExecutorService executorService = Executors.newFixedThreadPool(Math.min(peers.size(), MAX_PEER_WORKERS));
+        for (String peer : peers) {
+            executorService.submit(() -> worker(torrent, peer, pieceQueue, bufferMap, attempts, completed, listener));
+        }
+        executorService.shutdown();
+        try {
+            executorService.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Download interrupted");
+        }
+
+        List<Integer> missing = new ArrayList<>();
+        for (int i = 0; i < numPieces; i++) {
+            if (!bufferMap.containsKey(i)) {
+                missing.add(i);
             }
-            // write the pieces to the file
-            for (int i = 0; i < numPieces; i++) {
-                bufferLock.lock();
+        }
+        if (!missing.isEmpty()) {
+            throw new RuntimeException("Download incomplete: " + missing.size() + " of " + numPieces
+                    + " pieces could not be downloaded from any peer");
+        }
+
+        try {
+            Files.deleteIfExists(Paths.get(storageFilePath));
+        } catch (IOException e) {
+            throw new RuntimeException("Could not replace existing file: " + e.getMessage());
+        }
+        for (int i = 0; i < numPieces; i++) {
+            Utils.writePieceToFile(storageFilePath, bufferMap.get(i));
+        }
+    }
+
+    /**
+     * Peer worker: keeps a single handshaken connection open and downloads
+     * pieces from the shared queue until it drains or the peer fails repeatedly.
+     */
+    private static void worker(Torrent torrent, String peer, Queue<Integer> pieceQueue,
+                               Map<Integer, byte[]> bufferMap, Map<Integer, AtomicInteger> attempts,
+                               AtomicInteger completed, ProgressListener listener) {
+        int totalPieces = torrent.getPieces().size();
+        TCPService tcpService;
+        try {
+            tcpService = openPeerConnection(torrent, peer);
+        } catch (Exception e) {
+            System.out.println("Could not connect to peer " + peer + ": " + e.getMessage());
+            return;
+        }
+
+        int consecutiveFailures = 0;
+        try {
+            Integer pieceIndex;
+            while ((pieceIndex = pieceQueue.poll()) != null) {
                 try {
-                    Utils.writePieceToFile(storageFilePath, bufferMap.get(i));
-                } finally {
-                    bufferLock.unlock();
+                    byte[] piece = downloadPieceOverConnection(tcpService, (int) torrent.getPieceLength(pieceIndex), pieceIndex);
+                    if (!validatePieceHash(torrent.getPieces().get(pieceIndex), piece)) {
+                        throw new IOException("Hash mismatch for piece " + pieceIndex);
+                    }
+                    bufferMap.put(pieceIndex, piece);
+                    consecutiveFailures = 0;
+                    int done = completed.incrementAndGet();
+                    System.out.println("Downloaded piece " + pieceIndex + " from " + peer + " (" + done + "/" + totalPieces + ")");
+                    if (listener != null) {
+                        listener.onProgress(done, totalPieces);
+                    }
+                } catch (Exception e) {
+                    System.out.println("Error downloading piece " + pieceIndex + " from " + peer + ": " + e.getMessage());
+                    // Give other peers a chance at this piece, but don't retry forever
+                    if (attempts.computeIfAbsent(pieceIndex, k -> new AtomicInteger()).incrementAndGet() < MAX_PIECE_ATTEMPTS) {
+                        pieceQueue.add(pieceIndex);
+                    }
+                    if (++consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+                        break;
+                    }
+                    // The stream may be desynchronized after an error — reconnect
+                    try { tcpService.close(); } catch (IOException ignored) {}
+                    tcpService = openPeerConnection(torrent, peer);
                 }
             }
         } catch (Exception e) {
-            System.out.println("Error getting peer list: " + e.getMessage());
-        }
-    }
-    private static void worker(Torrent torrent, String peer, boolean isMagnetDownload) {
-        while (true) {
-            Integer pieceIndex = pieceQueue.poll();
-            if (pieceIndex == null) {
-                break;
-            }
-            // calculate the piece length based on the piece index
-            try {
-                byte[] piece = downloadPieceFromPeer(torrent, peer, pieceIndex, isMagnetDownload);
-                bufferLock.lock();
-                try {
-                    bufferMap.put(pieceIndex, piece);
-                    System.out.println("Downloaded piece: " + pieceIndex);
-                } finally {
-                    bufferLock.unlock();
-                }
-            } catch (Exception e) {
-                System.out.println("Error downloading piece: " + e.getMessage());
-                pieceQueue.add(pieceIndex);
-            }
+            System.out.println("Peer " + peer + " dropped: " + e.getMessage());
+        } finally {
+            try { tcpService.close(); } catch (IOException ignored) {}
         }
     }
 
@@ -254,6 +413,9 @@ public class TorrentDownloader {
                 trackerURLs.add(torrent.getTrackerURL());
             }
         }
+        if (trackerURLs.isEmpty()) {
+            throw new RuntimeException("Torrent has no tracker URLs");
+        }
 
         byte[] infoHashBytes = Utils.hexStringToByteArray(torrent.getInfoHash());
         byte[] peerIdBytes = generatePeerId();
@@ -261,28 +423,8 @@ public class TorrentDownloader {
 
         for (String url : trackerURLs) {
             try {
-                if (url.startsWith("udp://")) {
-                    List<String> peers = UdpTrackerService.getPeerList(url, infoHashBytes, peerIdBytes, torrent.getLength());
-                    if (!peers.isEmpty()) return peers;
-                } else if (url.startsWith("http://") || url.startsWith("https://")) {
-                    String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
-                    String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
-
-                    HttpClientService httpClientService = new HttpClientService();
-                    String requestURL = httpClientService.newRequestURLBuilder(url)
-                            .addParam("info_hash", infoHash)
-                            .addParam("peer_id", peerId)
-                            .addParam("port", String.valueOf(PORT))
-                            .addParam("uploaded", "0")
-                            .addParam("downloaded", "0")
-                            .addParam("left", String.valueOf(torrent.getLength()))
-                            .addParam("compact", "1")
-                            .build();
-
-                    HttpResponse<byte[]> response = httpClientService.sendGetRequest(requestURL);
-                    List<String> peers = getPeerListFromHTTPResponse(response);
-                    if (!peers.isEmpty()) return peers;
-                }
+                List<String> peers = announceToTracker(url, infoHashBytes, peerIdBytes, torrent.getLength(), null);
+                if (!peers.isEmpty()) return peers;
             } catch (Exception e) {
                 errors.add(url + ": " + e.getMessage());
                 System.out.println("Tracker " + url + " failed: " + e.getMessage());
@@ -292,40 +434,57 @@ public class TorrentDownloader {
         throw new RuntimeException("All trackers failed: " + String.join("; ", errors));
     }
 
+    private static List<String> announceToTracker(String url, byte[] infoHashBytes, byte[] peerIdBytes,
+                                                  long left, String displayName) throws Exception {
+        if (url.startsWith("udp://")) {
+            return UdpTrackerService.getPeerList(url, infoHashBytes, peerIdBytes, left);
+        }
+        if (url.startsWith("http://") || url.startsWith("https://")) {
+            String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
+            String peerId = new String(peerIdBytes, StandardCharsets.ISO_8859_1);
+
+            HttpClientService httpClientService = new HttpClientService();
+            HttpClientService.RequestURLBuilder builder = httpClientService.newRequestURLBuilder(url)
+                    .addParam("info_hash", infoHash)
+                    .addParam("peer_id", peerId)
+                    .addParam("port", String.valueOf(PORT))
+                    .addParam("uploaded", "0")
+                    .addParam("downloaded", "0")
+                    .addParam("left", String.valueOf(left))
+                    .addParam("compact", "1");
+            if (displayName != null && !displayName.isEmpty()) {
+                builder.addParam("dn", displayName);
+            }
+            HttpResponse<byte[]> response = httpClientService.sendGetRequest(builder.build());
+            return getPeerListFromHTTPResponse(response);
+        }
+        throw new RuntimeException("Unsupported tracker protocol: " + url);
+    }
+
     public static List<String> getPeerListFromMagnetInfo(Map<String, String> magnetInfoMap) {
-        String infoHashHex = magnetInfoMap.get("xt").split(":")[2];
+        String infoHashHex = TorrentUtils.getInfoHashFromMagnetParams(magnetInfoMap);
         byte[] infoHashBytes = Utils.hexStringToByteArray(infoHashHex);
         byte[] peerIdBytes = generatePeerId();
-        List<String> trackerUrls = TorrentUtils.getTrackerList(magnetInfoMap);
         List<String> errors = new ArrayList<>();
 
-        for (String trackerUrl : trackerUrls) {
+        // Direct peers from x.pe params don't need a tracker round trip
+        List<String> peers = new ArrayList<>(TorrentUtils.getDirectPeers(magnetInfoMap));
+
+        for (String trackerUrl : TorrentUtils.getTrackerList(magnetInfoMap)) {
             try {
-                if (trackerUrl.startsWith("udp://")) {
-                    List<String> peers = UdpTrackerService.getPeerList(trackerUrl, infoHashBytes, peerIdBytes, 1);
-                    if (!peers.isEmpty()) return peers;
-                } else if (trackerUrl.startsWith("http://") || trackerUrl.startsWith("https://")) {
-                    String infoHash = new String(infoHashBytes, StandardCharsets.ISO_8859_1);
-                    String peerId = Utils.byteToHexString(Utils.getRandomBytes(10));
-                    HttpClientService httpClientService = new HttpClientService();
-                    String requestURL = httpClientService.newRequestURLBuilder(trackerUrl)
-                            .addParam("info_hash", infoHash)
-                            .addParam("dn", magnetInfoMap.getOrDefault("dn", ""))
-                            .addParam("port", String.valueOf(PORT))
-                            .addParam("downloaded", "0")
-                            .addParam("uploaded", "0")
-                            .addParam("left", "1")
-                            .addParam("compact", "1")
-                            .addParam("peer_id", peerId)
-                            .build();
-                    HttpResponse<byte[]> response = httpClientService.sendGetRequest(requestURL);
-                    List<String> peers = getPeerListFromHTTPResponse(response);
-                    if (!peers.isEmpty()) return peers;
+                List<String> trackerPeers = announceToTracker(trackerUrl, infoHashBytes, peerIdBytes, 1,
+                        magnetInfoMap.getOrDefault("dn", ""));
+                for (String p : trackerPeers) {
+                    if (!peers.contains(p)) peers.add(p);
                 }
+                if (!peers.isEmpty()) return peers;
             } catch (Exception e) {
                 errors.add(trackerUrl + ": " + e.getMessage());
                 System.out.println("Tracker " + trackerUrl + " failed: " + e.getMessage());
             }
+        }
+        if (!peers.isEmpty()) {
+            return peers;
         }
 
         // Fallback: try xs (exact source) URL to download .torrent file directly
@@ -361,21 +520,19 @@ public class TorrentDownloader {
         }
         extensionDict.put("m", m);
         byte[] extensionDictBytes = new Bencode(true).encode(extensionDict);
-        // create byte array for the extension handshake message with a 4 byte length prefix, 1 byte message ID, 1 byte extension messageid, and the extension dictionary
         ByteBuffer buffer = ByteBuffer.allocate(4 + 1 + 1 + extensionDictBytes.length);
         buffer.putInt(1 + 1 + extensionDictBytes.length);
-        buffer.put((byte) 20);
+        buffer.put(EXTENSION_MESSAGE_ID);
         buffer.put((byte) 0);
         buffer.put(extensionDictBytes);
-        System.out.println("Extension handshake message created");
         return buffer.array();
     }
 
+    @SuppressWarnings("unchecked")
     public static Map<String, Object> parseExtensionHandshakeResponse(byte[] extensionHandshakeResponse) {
         byte[] extensionDictBytes = Arrays.copyOfRange(extensionHandshakeResponse, 2, extensionHandshakeResponse.length);
         Map<String, Object> extensionDict = new Bencode(false).decode(extensionDictBytes, Type.DICTIONARY);
-        Map<String, Object> m = (Map<String, Object>) extensionDict.get("m");
-        return m;
+        return (Map<String, Object>) extensionDict.get("m");
     }
 
     public static byte[] createMetadataRequestMessage(int messageType, int pieceIndex, long extensionId) {
@@ -383,43 +540,51 @@ public class TorrentDownloader {
         metadataRequestDict.put("msg_type", messageType);
         metadataRequestDict.put("piece", pieceIndex);
         byte[] metadataRequestDictBytes = new Bencode(true).encode(metadataRequestDict);
-        // create byte array for the metadata request message with a 4 byte length prefix, 1 byte message ID, and the metadata request dictionary
         ByteBuffer buffer = ByteBuffer.allocate(4 + 1 + 1 + metadataRequestDictBytes.length);
         buffer.putInt(2 + metadataRequestDictBytes.length);
-        buffer.put((byte) 20);
+        buffer.put(EXTENSION_MESSAGE_ID);
         buffer.put((byte) extensionId);
         buffer.put(metadataRequestDictBytes);
-        System.out.println("Metadata request message created");
         return buffer.array();
     }
 
-    public static Pair<TCPService, Long> performMagnetHandshakeOnPeer(TCPService tcpService, String infohash) {
-        TorrentDownloader.performHandshake(infohash, tcpService, true);
-        // wait for bitfield message
-        byte[] bitfieldMessage = tcpService.waitForMessage();
-        if (bitfieldMessage[0] != 5) {
-            System.out.println("Expected bitfield message, received different message type: " + bitfieldMessage[4]);
+    /** Reads messages until an extended-protocol message (id 20) arrives. */
+    public static byte[] waitForExtendedMessage(TCPService tcpService) {
+        for (int i = 0; i < MAX_SKIPPED_MESSAGES; i++) {
+            byte[] message = tcpService.waitForMessage();
+            if (message[0] == EXTENSION_MESSAGE_ID) {
+                return message;
+            }
         }
-        System.out.println("Received bitfield message");
-        // send extension handshake
-        List<String> extensionList = new ArrayList<>();
-        extensionList.add("ut_metadata");
-        extensionList.add("ut_pex");
-        byte[] extensionHandshakeMessage = TorrentDownloader.createExtensionHandshakeMessage(extensionList);
-        tcpService.sendMessage(extensionHandshakeMessage);
-        byte[] extensionHandshakeResponse = tcpService.waitForMessage();
-        Map<String, Object> metaDataIDMap = TorrentDownloader.parseExtensionHandshakeResponse(extensionHandshakeResponse);
-        System.out.println("Peer Metadata Extension ID: " + metaDataIDMap.get("ut_metadata"));
-        return Pair.of(tcpService, (long) metaDataIDMap.get("ut_metadata"));
+        throw new RuntimeException("Peer never sent an extension message");
     }
+
+    public static Pair<TCPService, Long> performMagnetHandshakeOnPeer(TCPService tcpService, String infohash) {
+        performHandshake(infohash, tcpService, true);
+        // Send our extension handshake; the peer's bitfield/have messages may
+        // arrive before its extension handshake, so skip until we see it
+        byte[] extensionHandshakeMessage = createExtensionHandshakeMessage(List.of("ut_metadata", "ut_pex"));
+        tcpService.sendMessage(extensionHandshakeMessage);
+        byte[] extensionHandshakeResponse = waitForExtendedMessage(tcpService);
+        Map<String, Object> metaDataIDMap = parseExtensionHandshakeResponse(extensionHandshakeResponse);
+        Object utMetadata = metaDataIDMap != null ? metaDataIDMap.get("ut_metadata") : null;
+        if (!(utMetadata instanceof Number)) {
+            throw new RuntimeException("Peer does not support ut_metadata");
+        }
+        System.out.println("Peer Metadata Extension ID: " + utMetadata);
+        return Pair.of(tcpService, ((Number) utMetadata).longValue());
+    }
+
     public static Pair<TCPService, Long> performMagnetHandshakeOnPeer(Map<String, String> magnetInfo, String peerIP, int peerPort) {
         TCPService tcpService = null;
         try {
-            Socket socket = new Socket(peerIP, peerPort);
-            tcpService = new TCPService(socket);
-            return performMagnetHandshakeOnPeer(tcpService, magnetInfo.get("xt").split(":")[2]);
+            tcpService = connectToPeer(peerIP + ":" + peerPort);
+            return performMagnetHandshakeOnPeer(tcpService, TorrentUtils.getInfoHashFromMagnetParams(magnetInfo));
         } catch (Exception e) {
-            System.out.println("Failed to connect to peer: " + peerIP + ":" + peerPort + " - " + e.getMessage());
+            System.out.println("Failed magnet handshake with peer: " + peerIP + ":" + peerPort + " - " + e.getMessage());
+            if (tcpService != null) {
+                try { tcpService.close(); } catch (IOException ignored) {}
+            }
         }
         return null;
     }
@@ -430,11 +595,11 @@ public class TorrentDownloader {
     }
 
     public static Pair<TCPService, Long> performMagnetHandshakeWithParams(Map<String, String> magnetInfo) {
-        List<String> peerList = TorrentDownloader.getPeerListFromMagnetInfo(magnetInfo);
+        List<String> peerList = getPeerListFromMagnetInfo(magnetInfo);
         for (String peer : peerList) {
             String peerIP = peer.split(":")[0];
             int peerPort = Integer.parseInt(peer.split(":")[1]);
-            Pair<TCPService, Long> handshakeResult = TorrentDownloader.performMagnetHandshakeOnPeer(magnetInfo, peerIP, peerPort);
+            Pair<TCPService, Long> handshakeResult = performMagnetHandshakeOnPeer(magnetInfo, peerIP, peerPort);
             if (handshakeResult != null && handshakeResult.getLeft() != null) {
                 return handshakeResult;
             }
@@ -447,7 +612,6 @@ public class TorrentDownloader {
         Map<String, Object> metadataDict = new Bencode(false).decode(payloadBytes, Type.DICTIONARY);
         int metadataPieceLength = ((Number) metadataDict.get("total_size")).intValue();
         byte[] metadataPieceBytes = Arrays.copyOfRange(payloadBytes, payloadBytes.length - metadataPieceLength, payloadBytes.length);
-        Map<String, Object> metadataPieceDict = new Bencode(true).decode(metadataPieceBytes, Type.DICTIONARY);
-        return metadataPieceDict;
+        return new Bencode(true).decode(metadataPieceBytes, Type.DICTIONARY);
     }
 }

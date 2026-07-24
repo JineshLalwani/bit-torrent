@@ -69,6 +69,10 @@ public class UdpTrackerService {
             throw new RuntimeException("UDP tracker connect timed out (UDP may be blocked)");
         }
 
+        if (recvPacket.getLength() < 16) {
+            throw new RuntimeException("UDP tracker connect failed: short response (" + recvPacket.getLength() + " bytes)");
+        }
+
         ByteBuffer recvBuf = ByteBuffer.wrap(recvData);
         int action = recvBuf.getInt();
         int recvTransactionId = recvBuf.getInt();

@@ -1,10 +1,13 @@
 import React, { useState } from 'react';
-import { torrentApi, TorrentInfoResponse, PeerListResponse, DownloadResponse } from '../services/api';
+import { torrentApi, TorrentInfoResponse, PeerListResponse } from '../services/api';
+import { useAsyncDownload } from '../hooks/useAsyncDownload';
+import DownloadProgress from './DownloadProgress';
 
 const TorrentTab: React.FC = () => {
     const [file, setFile] = useState<File | null>(null);
-    const [result, setResult] = useState<TorrentInfoResponse | PeerListResponse | DownloadResponse | null>(null);
+    const [result, setResult] = useState<TorrentInfoResponse | PeerListResponse | null>(null);
     const [loading, setLoading] = useState(false);
+    const { status: downloadStatus, active: downloading, start: startDownload } = useAsyncDownload();
 
     const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
@@ -12,33 +15,14 @@ const TorrentTab: React.FC = () => {
         }
     };
 
-    const handleGetInfo = async () => {
+    const runAction = async (action: () => Promise<TorrentInfoResponse | PeerListResponse>) => {
         if (!file) {
             alert('Please select a torrent file first');
             return;
         }
-
         setLoading(true);
         try {
-            const response = await torrentApi.getTorrentInfo(file);
-            setResult(response);
-        } catch (error) {
-            setResult({ error: (error as Error).message } as any);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleGetPeers = async () => {
-        if (!file) {
-            alert('Please select a torrent file first');
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const response = await torrentApi.getPeers(file);
-            setResult(response);
+            setResult(await action());
         } catch (error) {
             setResult({ error: (error as Error).message } as any);
         } finally {
@@ -51,20 +35,8 @@ const TorrentTab: React.FC = () => {
             alert('Please select a torrent file first');
             return;
         }
-
-        if (!window.confirm('Start downloading this torrent?')) {
-            return;
-        }
-
-        setLoading(true);
-        try {
-            const response = await torrentApi.downloadTorrent(file);
-            setResult(response);
-        } catch (error) {
-            setResult({ error: (error as Error).message } as any);
-        } finally {
-            setLoading(false);
-        }
+        setResult(null);
+        await startDownload(() => torrentApi.startTorrentDownload(file));
     };
 
     return (
@@ -82,14 +54,14 @@ const TorrentTab: React.FC = () => {
                 </div>
 
                 <div className="button-group">
-                    <button onClick={handleGetInfo} className="btn btn-info" disabled={loading}>
+                    <button onClick={() => runAction(() => torrentApi.getTorrentInfo(file!))} className="btn btn-info" disabled={loading || downloading}>
                         Get Info
                     </button>
-                    <button onClick={handleGetPeers} className="btn btn-info" disabled={loading}>
+                    <button onClick={() => runAction(() => torrentApi.getPeers(file!))} className="btn btn-info" disabled={loading || downloading}>
                         Get Peers
                     </button>
-                    <button onClick={handleDownload} className="btn btn-primary" disabled={loading}>
-                        Download
+                    <button onClick={handleDownload} className="btn btn-primary" disabled={loading || downloading}>
+                        {downloading ? 'Downloading…' : 'Download'}
                     </button>
                 </div>
             </div>
@@ -101,10 +73,12 @@ const TorrentTab: React.FC = () => {
                 </div>
             )}
 
+            {downloadStatus && <DownloadProgress status={downloadStatus} />}
+
             {result && (
                 <div className="card result-card">
                     <h3>Result</h3>
-                    <pre className={result.error ? 'error' : ''}>
+                    <pre className={(result as any).error ? 'error' : ''}>
                         {JSON.stringify(result, null, 2)}
                     </pre>
                 </div>

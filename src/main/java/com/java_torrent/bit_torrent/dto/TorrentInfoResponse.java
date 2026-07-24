@@ -2,10 +2,11 @@ package com.java_torrent.bit_torrent.dto;
 
 public class TorrentInfoResponse {
     private String trackerUrl;
+    private String name;
     private Long length;
     private String infoHash;
     private Integer pieceCount;
-    private Integer pieceLength;
+    private Long pieceLength;
     private String error;
 
     public TorrentInfoResponse() {}
@@ -14,9 +15,10 @@ public class TorrentInfoResponse {
         this.error = error;
     }
 
-    public TorrentInfoResponse(String trackerUrl, Long length, String infoHash,
-                               Integer pieceCount, Integer pieceLength, String error) {
+    public TorrentInfoResponse(String trackerUrl, String name, Long length, String infoHash,
+                               Integer pieceCount, Long pieceLength, String error) {
         this.trackerUrl = trackerUrl;
+        this.name = name;
         this.length = length;
         this.infoHash = infoHash;
         this.pieceCount = pieceCount;
@@ -24,9 +26,11 @@ public class TorrentInfoResponse {
         this.error = error;
     }
 
-    // Getters and Setters
     public String getTrackerUrl() { return trackerUrl; }
     public void setTrackerUrl(String trackerUrl) { this.trackerUrl = trackerUrl; }
+
+    public String getName() { return name; }
+    public void setName(String name) { this.name = name; }
 
     public Long getLength() { return length; }
     public void setLength(Long length) { this.length = length; }
@@ -37,8 +41,8 @@ public class TorrentInfoResponse {
     public Integer getPieceCount() { return pieceCount; }
     public void setPieceCount(Integer pieceCount) { this.pieceCount = pieceCount; }
 
-    public Integer getPieceLength() { return pieceLength; }
-    public void setPieceLength(Integer pieceLength) { this.pieceLength = pieceLength; }
+    public Long getPieceLength() { return pieceLength; }
+    public void setPieceLength(Long pieceLength) { this.pieceLength = pieceLength; }
 
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }

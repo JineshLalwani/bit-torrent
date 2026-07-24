@@ -23,7 +23,9 @@ public final class Torrent {
 
     private final List<String> pieces;
 
-    private static String bufToString(Object val) {
+    private final String name;
+
+    public static String bufToString(Object val) {
         if (val instanceof ByteBuffer) {
             return new String(((ByteBuffer) val).array(), StandardCharsets.UTF_8);
         }
@@ -71,6 +73,7 @@ public final class Torrent {
         byte[] pieceHashBytes = ((ByteBuffer) infoDict.get("pieces")).array();
         List<String> pieces = TorrentUtils.splitPieceHashes(pieceHashBytes, 20, new ArrayList<>());
         String infoHash = Utils.calculateSHA1(bencode.encode(infoDict));
+        String name = bufToString(infoDict.get("name"));
 
         return new Torrent.Builder()
                 .setTrackerURL(trackerURL)
@@ -79,6 +82,7 @@ public final class Torrent {
                 .setInfoHash(infoHash)
                 .setPieceLength(pieceLength)
                 .setPieces(pieces)
+                .setName(name)
                 .build();
     }
 
@@ -89,6 +93,7 @@ public final class Torrent {
         this.infoHash = builder.infoHash;
         this.pieceLength = builder.pieceLength;
         this.pieces = builder.pieces;
+        this.name = builder.name;
     }
 
     public void printInfo() {
@@ -109,6 +114,12 @@ public final class Torrent {
         private String infoHash;
         private long pieceLength;
         private List<String> pieces;
+        private String name;
+
+        public Builder setName(String name) {
+            this.name = name;
+            return this;
+        }
 
         public Builder setTrackerURL(String trackerURL) {
             this.trackerURL = trackerURL;
@@ -156,6 +167,14 @@ public final class Torrent {
 
     public long getLength() {
         return length;
+    }
+
+    public long getPieceLength() {
+        return pieceLength;
+    }
+
+    public String getName() {
+        return name;
     }
 
     public long getPieceLength(int index) {

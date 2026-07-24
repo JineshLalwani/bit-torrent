@@ -13,6 +13,12 @@ public interface ITorrentService {
 
     DownloadResponse downloadTorrent(MultipartFile file) throws Exception;
 
+    DownloadStatusResponse startTorrentDownload(MultipartFile file) throws Exception;
+
+    DownloadStatusResponse startMagnetDownload(String magnetUrl);
+
+    DownloadStatusResponse getDownloadStatus(String downloadId);
+
     MagnetParseResponse parseMagnetUrl(String magnetUrl);
 
     TorrentInfoResponse getMagnetInfo(String magnetUrl) throws Exception;

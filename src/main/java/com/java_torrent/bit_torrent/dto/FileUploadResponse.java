@@ -8,6 +8,7 @@ public class FileUploadResponse {
     private int pieceCount;
     private long pieceLength;
     private String uploadedAt;
+    private String magnetLink;
     private String error;
 
     public FileUploadResponse() {}
@@ -48,6 +49,9 @@ public class FileUploadResponse {
 
     public String getUploadedAt() { return uploadedAt; }
     public void setUploadedAt(String uploadedAt) { this.uploadedAt = uploadedAt; }
+
+    public String getMagnetLink() { return magnetLink; }
+    public void setMagnetLink(String magnetLink) { this.magnetLink = magnetLink; }
 
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }

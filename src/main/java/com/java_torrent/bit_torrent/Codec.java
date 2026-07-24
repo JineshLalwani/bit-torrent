@@ -4,6 +4,7 @@ import com.dampcake.bencode.Bencode;
 import com.dampcake.bencode.Type;
 import com.google.gson.Gson;
 
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Map;
 
@@ -11,17 +12,23 @@ public class Codec {
 
     private static final Gson gson = new Gson();
 
+    public static String decodeToJson(String bencodedString) throws Exception {
+        Object decoded = decodeBencodedBytes(bencodedString.getBytes(StandardCharsets.ISO_8859_1));
+        return gson.toJson(decoded);
+    }
+
     public static void decodeAndPrintBencodedString(String bencodedString) {
-        Object decoded;
         try {
-            decoded = Codec.decodeBencodedBytes(bencodedString.getBytes());
+            System.out.println(decodeToJson(bencodedString));
         } catch (Exception e) {
             System.out.println("Problem encountered during decoding: " + e.getMessage());
-            return;
         }
-        System.out.println(gson.toJson(decoded));
     }
+
     public static Object decodeBencodedBytes(byte[] bencodedBytes) throws Exception {
+        if (bencodedBytes == null || bencodedBytes.length == 0) {
+            throw new Exception("Empty bencoded value");
+        }
         Bencode bencode = new Bencode();
         if (Character.isDigit((char) bencodedBytes[0])) {
             String decodedString = bencode.decode(bencodedBytes, Type.STRING);
@@ -36,7 +43,7 @@ public class Codec {
             Map<String, Object> decodedDict = bencode.decode(bencodedBytes, Type.DICTIONARY);
             return decodedDict;
         } else {
-            throw new Exception("Unsupported bencode type: " + bencodedBytes[0]);
+            throw new Exception("Unsupported bencode type: " + (char) bencodedBytes[0]);
         }
     }
 }

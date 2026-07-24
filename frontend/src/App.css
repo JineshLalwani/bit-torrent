@@ -530,3 +530,102 @@ header h1 {
   font-size: 0.85rem;
   color: #888;
 }
+
+/* Download progress */
+.download-progress {
+  padding: 1.5rem 2rem;
+}
+
+.progress-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 0.75rem;
+}
+
+.progress-name {
+  font-weight: 600;
+  color: #333;
+  overflow-wrap: anywhere;
+}
+
+.status-badge {
+  font-size: 0.8rem;
+  font-weight: 600;
+  padding: 0.2rem 0.6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.status-badge.running {
+  background: #eef2ff;
+  color: #4f46e5;
+}
+
+.status-badge.completed {
+  background: #f0fdf4;
+  color: #16a34a;
+}
+
+.status-badge.failed {
+  background: #fef2f2;
+  color: #dc2626;
+}
+
+.progress-track {
+  height: 10px;
+  background: #e5e7eb;
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  height: 100%;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border-radius: 999px;
+  transition: width 0.4s ease;
+}
+
+.progress-fill.failed {
+  background: #dc2626;
+}
+
+.progress-fill.indeterminate {
+  width: 30% !important;
+  animation: progress-slide 1.2s ease-in-out infinite alternate;
+}
+
+@keyframes progress-slide {
+  from { margin-left: 0; }
+  to { margin-left: 70%; }
+}
+
+.progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: #666;
+}
+
+.progress-error {
+  margin-top: 0.75rem;
+  white-space: pre-wrap;
+}
+
+/* Magnet links in the File Hub */
+.magnet-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 0.75rem;
+}
+
+.magnet-link {
+  font-family: 'Monaco', 'Menlo', monospace;
+  font-size: 0.75rem;
+  color: #4f46e5;
+  overflow-wrap: anywhere;
+  flex: 1;
+}
