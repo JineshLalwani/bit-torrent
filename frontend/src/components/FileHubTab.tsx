@@ -1,12 +1,10 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { fileShareApi, SharedFileInfo } from '../services/api';
-
-const formatFileSize = (bytes: number): string => {
-    if (bytes < 1024) return bytes + ' B';
-    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
-    if (bytes < 1024 * 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / (1024 * 1024 * 1024)).toFixed(2) + ' GB';
-};
+import { formatFileSize } from '../utils/format';
+import { copyToClipboard } from '../utils/format';
+import FileDropZone from './FileDropZone';
+import { CopyableValue, ErrorBanner } from './ResultViews';
+import { useToast } from './Toasts';
 
 const MAX_UPLOAD_BYTES = 100 * 1024 * 1024; // matches server multipart limit
 
@@ -18,7 +16,8 @@ const FileHubTab: React.FC = () => {
     const [loadingFiles, setLoadingFiles] = useState(false);
     const [downloading, setDownloading] = useState<string | null>(null);
     const [expandedFile, setExpandedFile] = useState<string | null>(null);
-    const [copiedId, setCopiedId] = useState<string | null>(null);
+    const [search, setSearch] = useState('');
+    const toast = useToast();
 
     const loadFiles = async () => {
         setLoadingFiles(true);
@@ -28,7 +27,7 @@ const FileHubTab: React.FC = () => {
                 setFiles(response.files);
             }
         } catch (error) {
-            console.error('Failed to load files:', error);
+            toast.error('Could not load shared files: ' + (error as Error).message);
         } finally {
             setLoadingFiles(false);
         }
@@ -36,22 +35,23 @@ const FileHubTab: React.FC = () => {
 
     useEffect(() => {
         loadFiles();
+        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            setFile(e.target.files[0]);
-            setUploadResult(null);
-        }
-    };
+    const visibleFiles = useMemo(() => {
+        const q = search.trim().toLowerCase();
+        if (!q) return files;
+        return files.filter(f =>
+            f.fileName.toLowerCase().includes(q) || f.infoHash.toLowerCase().includes(q));
+    }, [files, search]);
 
     const handleUpload = async () => {
         if (!file) {
-            alert('Please select a file first');
+            toast.info('Select a file first');
             return;
         }
         if (file.size > MAX_UPLOAD_BYTES) {
-            alert('File is too large — the server accepts uploads up to 100 MB');
+            toast.error('File is too large — the server accepts uploads up to 100 MB');
             return;
         }
         setUploading(true);
@@ -61,6 +61,7 @@ const FileHubTab: React.FC = () => {
             setUploadResult(response);
             if (!response.error) {
                 setFile(null);
+                toast.success(`${response.fileName} is now being seeded`);
                 loadFiles();
             }
         } catch (error) {
@@ -75,7 +76,7 @@ const FileHubTab: React.FC = () => {
         try {
             await fileShareApi.downloadFile(fileId, fileName);
         } catch (error) {
-            alert('Download failed: ' + (error as Error).message);
+            toast.error('Download failed: ' + (error as Error).message);
         } finally {
             setDownloading(null);
         }
@@ -84,21 +85,17 @@ const FileHubTab: React.FC = () => {
     const handleTorrentDownload = async (fileId: string, fileName: string) => {
         try {
             await fileShareApi.downloadTorrentFile(fileId, fileName);
+            toast.success('.torrent file saved');
         } catch (error) {
-            alert('.torrent download failed: ' + (error as Error).message);
+            toast.error('.torrent download failed: ' + (error as Error).message);
         }
     };
 
-    const handleCopyMagnet = async (id: string, magnetLink?: string) => {
+    const handleCopyMagnet = async (magnetLink?: string) => {
         if (!magnetLink) return;
-        try {
-            await navigator.clipboard.writeText(magnetLink);
-        } catch {
-            // clipboard API unavailable (e.g. non-HTTPS) — fall back to prompt
-            window.prompt('Copy the magnet link:', magnetLink);
+        if (await copyToClipboard(magnetLink)) {
+            toast.success('Magnet link copied — paste it in the Magnet tab');
         }
-        setCopiedId(id);
-        setTimeout(() => setCopiedId(prev => (prev === id ? null : prev)), 2000);
     };
 
     const toggleExpand = (fileId: string) => {
@@ -107,89 +104,100 @@ const FileHubTab: React.FC = () => {
 
     return (
         <div className="tab-content">
-            <div className="ephemeral-warning">
-                Files are stored on a free-tier server and may be cleared periodically.
-            </div>
-
             <div className="card">
                 <h2>Share a File</h2>
-                <div className="upload-area">
-                    <input
-                        type="file"
-                        onChange={handleFileChange}
-                        className="file-input"
-                    />
-                    {file && <p className="file-name">Selected: {file.name} ({formatFileSize(file.size)})</p>}
-                </div>
+                <p className="card-sub">
+                    Uploaded files are seeded by this server over the BitTorrent protocol —
+                    anyone with the magnet link can download them.
+                </p>
+                <FileDropZone
+                    file={file}
+                    onFile={(f) => { setFile(f); setUploadResult(null); }}
+                    hint="Any file up to 100 MB"
+                />
                 <div className="button-group">
                     <button onClick={handleUpload} className="btn btn-primary" disabled={uploading || !file}>
-                        {uploading ? 'Uploading...' : 'Upload & Start Seeding'}
+                        {uploading ? 'Uploading…' : 'Upload & Start Seeding'}
                     </button>
                 </div>
 
                 {uploadResult && !uploadResult.error && (
                     <div className="upload-success">
-                        <p><span className="label">File: </span><strong>{uploadResult.fileName}</strong></p>
-                        <p><span className="label">Size: </span>{formatFileSize(uploadResult.fileSize)}</p>
+                        <p><span className="label">File: </span><strong>{uploadResult.fileName}</strong> ({formatFileSize(uploadResult.fileSize)})</p>
                         <p><span className="label">Info Hash: </span><span className="value">{uploadResult.infoHash}</span></p>
-                        <p><span className="label">Pieces: </span>{uploadResult.pieceCount} x {formatFileSize(uploadResult.pieceLength)}</p>
+                        <p><span className="label">Pieces: </span>{uploadResult.pieceCount} × {formatFileSize(uploadResult.pieceLength)}</p>
                         {uploadResult.magnetLink && (
                             <div className="magnet-row">
                                 <span className="magnet-link">{uploadResult.magnetLink}</span>
-                                <button className="btn-refresh" onClick={() => handleCopyMagnet(uploadResult.id, uploadResult.magnetLink)}>
-                                    {copiedId === uploadResult.id ? 'Copied!' : 'Copy Magnet'}
+                                <button className="btn-ghost" onClick={() => handleCopyMagnet(uploadResult.magnetLink)}>
+                                    Copy Magnet
                                 </button>
                             </div>
                         )}
                     </div>
                 )}
 
-                {uploadResult && uploadResult.error && (
-                    <div className="card result-card" style={{ marginTop: '1rem' }}>
-                        <pre className="error">{uploadResult.error}</pre>
-                    </div>
-                )}
+                {uploadResult?.error && <ErrorBanner message={uploadResult.error} />}
             </div>
 
             {uploading && (
                 <div className="loading">
                     <div className="spinner"></div>
-                    <p>Uploading and generating torrent metadata...</p>
+                    <p>Uploading and generating torrent metadata…</p>
                 </div>
             )}
 
             <div className="card">
                 <div className="card-header">
-                    <h2>Shared Files</h2>
-                    <button onClick={loadFiles} className="btn-refresh" disabled={loadingFiles}>
-                        {loadingFiles ? 'Loading...' : 'Refresh'}
+                    <h2>Shared Files {files.length > 0 && <span className="count-badge">{files.length}</span>}</h2>
+                    <button onClick={loadFiles} className="btn-ghost" disabled={loadingFiles}>
+                        {loadingFiles ? 'Loading…' : 'Refresh'}
                     </button>
                 </div>
 
+                {files.length > 3 && (
+                    <div className="input-group">
+                        <input
+                            type="search"
+                            value={search}
+                            onChange={(e) => setSearch(e.target.value)}
+                            placeholder="Search by name or info hash…"
+                            className="text-input"
+                        />
+                    </div>
+                )}
+
                 {files.length === 0 ? (
                     <div className="empty-state">
+                        <div className="empty-icon">🌱</div>
                         <p>No files shared yet. Be the first to upload!</p>
+                    </div>
+                ) : visibleFiles.length === 0 ? (
+                    <div className="empty-state">
+                        <p>No files match “{search}”.</p>
                     </div>
                 ) : (
                     <div className="file-list">
-                        {files.map((f) => (
+                        {visibleFiles.map((f) => (
                             <div key={f.id} className="file-card">
                                 <div className="file-card-header" onClick={() => toggleExpand(f.id)}>
                                     <div className="file-card-info">
                                         <span className="file-card-name">{f.fileName}</span>
-                                        <span className="file-card-size">{formatFileSize(f.fileSize)}</span>
+                                        <span className="file-card-size">{formatFileSize(f.fileSize)} · {f.pieceCount} pieces</span>
                                     </div>
                                     <div className="file-card-actions">
                                         <button
-                                            onClick={(e) => { e.stopPropagation(); handleCopyMagnet(f.id, f.magnetLink); }}
-                                            className="btn-refresh"
+                                            onClick={(e) => { e.stopPropagation(); handleCopyMagnet(f.magnetLink); }}
+                                            className="btn-ghost"
                                             disabled={!f.magnetLink}
+                                            title="Copy magnet link"
                                         >
-                                            {copiedId === f.id ? 'Copied!' : 'Copy Magnet'}
+                                            🧲 Magnet
                                         </button>
                                         <button
                                             onClick={(e) => { e.stopPropagation(); handleTorrentDownload(f.id, f.fileName); }}
-                                            className="btn-refresh"
+                                            className="btn-ghost"
+                                            title="Download .torrent file"
                                         >
                                             .torrent
                                         </button>
@@ -198,7 +206,7 @@ const FileHubTab: React.FC = () => {
                                             className="btn-download"
                                             disabled={downloading === f.id}
                                         >
-                                            {downloading === f.id ? 'Downloading...' : 'Download'}
+                                            {downloading === f.id ? 'Downloading…' : 'Download'}
                                         </button>
                                         <span className="expand-icon">{expandedFile === f.id ? '▲' : '▼'}</span>
                                     </div>
@@ -206,55 +214,34 @@ const FileHubTab: React.FC = () => {
 
                                 {expandedFile === f.id && (
                                     <div className="file-card-details">
-                                        <div className="detail-section">
-                                            <h4>Torrent Info</h4>
-                                            <div className="detail-grid">
-                                                <div className="detail-row">
-                                                    <span className="detail-label">File Name</span>
-                                                    <span className="detail-value">{f.fileName}</span>
-                                                </div>
-                                                <div className="detail-row">
-                                                    <span className="detail-label">File Size</span>
-                                                    <span className="detail-value">{formatFileSize(f.fileSize)} ({f.fileSize.toLocaleString()} bytes)</span>
-                                                </div>
-                                                <div className="detail-row">
-                                                    <span className="detail-label">Info Hash</span>
-                                                    <span className="detail-value detail-mono">{f.infoHash}</span>
-                                                </div>
-                                                <div className="detail-row">
-                                                    <span className="detail-label">Piece Count</span>
-                                                    <span className="detail-value">{f.pieceCount}</span>
-                                                </div>
-                                                <div className="detail-row">
-                                                    <span className="detail-label">Piece Length</span>
-                                                    <span className="detail-value">{formatFileSize(f.pieceLength)}</span>
-                                                </div>
-                                                <div className="detail-row">
-                                                    <span className="detail-label">Uploaded</span>
-                                                    <span className="detail-value">{new Date(f.uploadedAt).toLocaleString()}</span>
-                                                </div>
-                                                {f.magnetLink && (
-                                                    <div className="detail-row">
-                                                        <span className="detail-label">Magnet</span>
-                                                        <span className="detail-value detail-mono magnet-link">{f.magnetLink}</span>
-                                                    </div>
-                                                )}
+                                        <div className="info-grid">
+                                            <div className="info-row">
+                                                <span className="info-label">File Size</span>
+                                                <span className="info-value">{formatFileSize(f.fileSize)} <span className="info-sub">({f.fileSize.toLocaleString()} bytes)</span></span>
                                             </div>
-                                        </div>
-
-                                        <div className="detail-section">
-                                            <h4>Peers</h4>
-                                            <div className="peers-list">
-                                                <div className="peer-item">
-                                                    <span className="peer-badge seeder">Seeder</span>
-                                                    <span className="peer-address">This server's built-in seeder</span>
-                                                    <span className="peer-status connected">Listening</span>
-                                                </div>
+                                            <div className="info-row">
+                                                <span className="info-label">Info Hash</span>
+                                                <span className="info-value mono"><CopyableValue value={f.infoHash} label="Info hash" /></span>
                                             </div>
-                                            <p className="peers-summary">
-                                                Paste the magnet link into the Magnet tab (or the .torrent into the Torrent tab) to download this file over the BitTorrent protocol.
-                                            </p>
+                                            <div className="info-row">
+                                                <span className="info-label">Pieces</span>
+                                                <span className="info-value">{f.pieceCount} × {formatFileSize(f.pieceLength)}</span>
+                                            </div>
+                                            <div className="info-row">
+                                                <span className="info-label">Uploaded</span>
+                                                <span className="info-value">{new Date(f.uploadedAt).toLocaleString()}</span>
+                                            </div>
+                                            {f.magnetLink && (
+                                                <div className="info-row">
+                                                    <span className="info-label">Magnet</span>
+                                                    <span className="info-value mono"><CopyableValue value={f.magnetLink} label="Magnet link" /></span>
+                                                </div>
+                                            )}
                                         </div>
+                                        <p className="peers-summary">
+                                            Seeded by this server. Paste the magnet link into the Magnet tab
+                                            (or the .torrent into the Torrent tab) to download it over BitTorrent.
+                                        </p>
                                     </div>
                                 )}
                             </div>

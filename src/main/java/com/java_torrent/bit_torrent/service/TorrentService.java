@@ -162,7 +162,7 @@ public class TorrentService implements ITorrentService {
         if (job.getStatus() == DownloadManager.Status.COMPLETED) {
             progress = 100.0;
         }
-        return new DownloadStatusResponse(
+        DownloadStatusResponse response = new DownloadStatusResponse(
                 job.getId(),
                 job.getFileName(),
                 job.getFilePath(),
@@ -172,6 +172,15 @@ public class TorrentService implements ITorrentService {
                 Math.round(progress * 10.0) / 10.0,
                 job.getError()
         );
+        response.setCreatedAt(job.getCreatedAt());
+        return response;
+    }
+
+    @Override
+    public List<DownloadStatusResponse> listDownloads() {
+        return downloadManager.listJobs().stream()
+                .map(TorrentService::toStatusResponse)
+                .collect(java.util.stream.Collectors.toList());
     }
 
     @Override

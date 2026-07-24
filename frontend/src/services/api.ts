@@ -35,6 +35,7 @@ export interface DownloadStatusResponse {
     totalPieces: number;
     completedPieces: number;
     progress: number;
+    createdAt: number;
     error?: string;
 }
 
@@ -110,6 +111,11 @@ export const torrentApi = {
 
     getDownloadStatus: async (downloadId: string): Promise<DownloadStatusResponse> => {
         const response = await fetch(`${API_BASE_URL}/download/status/${downloadId}`);
+        return asJson(response);
+    },
+
+    listDownloads: async (): Promise<DownloadStatusResponse[]> => {
+        const response = await fetch(`${API_BASE_URL}/downloads`);
         return asJson(response);
     },
 

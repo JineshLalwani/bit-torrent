@@ -3,12 +3,15 @@ package com.java_torrent.bit_torrent.service;
 import jakarta.annotation.PreDestroy;
 import org.springframework.stereotype.Service;
 
+import java.util.Comparator;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.function.Consumer;
+import java.util.stream.Collectors;
 
 /**
  * Tracks asynchronous download jobs so the API can start a download, return
@@ -21,6 +24,7 @@ public class DownloadManager {
 
     public static class DownloadJob {
         private final String id;
+        private final long createdAt = System.currentTimeMillis();
         private volatile String fileName;
         private volatile String filePath;
         private volatile Status status = Status.PENDING;
@@ -34,6 +38,7 @@ public class DownloadManager {
         }
 
         public String getId() { return id; }
+        public long getCreatedAt() { return createdAt; }
         public String getFileName() { return fileName; }
         public void setFileName(String fileName) { this.fileName = fileName; }
         public String getFilePath() { return filePath; }
@@ -77,6 +82,13 @@ public class DownloadManager {
 
     public DownloadJob getJob(String id) {
         return jobs.get(id);
+    }
+
+    /** All jobs, newest first. */
+    public List<DownloadJob> listJobs() {
+        return jobs.values().stream()
+                .sorted(Comparator.comparingLong(DownloadJob::getCreatedAt).reversed())
+                .collect(Collectors.toList());
     }
 
     @PreDestroy

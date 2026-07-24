@@ -8,6 +8,7 @@ public class DownloadStatusResponse {
     private int totalPieces;
     private int completedPieces;
     private double progress;
+    private long createdAt;
     private String error;
 
     public DownloadStatusResponse() {}
@@ -49,6 +50,9 @@ public class DownloadStatusResponse {
 
     public double getProgress() { return progress; }
     public void setProgress(double progress) { this.progress = progress; }
+
+    public long getCreatedAt() { return createdAt; }
+    public void setCreatedAt(long createdAt) { this.createdAt = createdAt; }
 
     public String getError() { return error; }
     public void setError(String error) { this.error = error; }

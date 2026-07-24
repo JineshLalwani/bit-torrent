@@ -79,6 +79,11 @@ public class TorrentController {
         }
     }
 
+    @GetMapping("/downloads")
+    public ResponseEntity<java.util.List<DownloadStatusResponse>> listDownloads() {
+        return ResponseEntity.ok(torrentService.listDownloads());
+    }
+
     @GetMapping("/download/status/{downloadId}")
     public ResponseEntity<DownloadStatusResponse> getDownloadStatus(@PathVariable String downloadId) {
         DownloadStatusResponse response = torrentService.getDownloadStatus(downloadId);

@@ -19,6 +19,8 @@ public interface ITorrentService {
 
     DownloadStatusResponse getDownloadStatus(String downloadId);
 
+    java.util.List<DownloadStatusResponse> listDownloads();
+
     MagnetParseResponse parseMagnetUrl(String magnetUrl);
 
     TorrentInfoResponse getMagnetInfo(String magnetUrl) throws Exception;
